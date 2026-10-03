@@ -34,6 +34,7 @@
 'use strict';
 const nodeCrypto = require('node:crypto');
 const resultContract = require('./result-contract');
+const floCapabilities = require('./flo-capability-profile.js');
 
 const DEFAULT_MAX_CONCURRENT = 0;   // unlimited by default; env STARNET_V1_MAX_CONCURRENT opts into a ceiling
 const MIN_KEY_LEN = 16;              // below this, refuse to enable (guessable key on a terminal-capable surface = RCE)
@@ -287,9 +288,17 @@ function makeOpenAiCompat(deps) {
       taskKey: 'v1:' + o.agentId, taskSource: 'api',
       // an externally-driven run is still this agent doing real work — it learns from it like any other, with each
       // record stamped origin:'api' so the Commander can tell it apart from their own conversation.
-      reflect: !o.outputOnly, outputOnly: !!o.outputOnly, maxIters: o.outputOnly ? 1 : undefined
+      reflect: o.capabilityGuard ? false : !o.outputOnly, outputOnly: !!o.outputOnly,
+      capabilityProfile: o.capabilityGuard ? o.capabilityGuard.profile.id : undefined,
+      floCapabilityGuard: o.capabilityGuard || null,
+      isTask: o.capabilityGuard ? o.capabilityGuard.profile.id === 'flo-research' : undefined,
+      maxIters: o.capabilityGuard ? o.capabilityGuard.profile.max_iterations : o.outputOnly ? 1 : undefined,
+      fallbackModels: o.capabilityGuard ? [] : undefined, fallbackProviders: o.capabilityGuard ? [] : undefined
     }));
-    return Promise.resolve(p).then(() => acc, (e) => { acc.reason = 'error'; acc.errMsg = acc.errMsg || ('run failed: ' + ((e && e.message) || e)); return acc; });
+    return Promise.resolve(p).then(() => acc, (e) => { acc.reason = 'error'; acc.errMsg = acc.errMsg || ('run failed: ' + ((e && e.message) || e)); return acc; }).then(value => {
+      if (o.capabilityGuard) value.capabilityReceipt = o.capabilityGuard.receipt();
+      return value;
+    });
   }
 
   // persist the user + assistant turns to the channel transcript store, so an externally-driven run is visible in
@@ -360,6 +369,7 @@ function makeOpenAiCompat(deps) {
       session_continuity_header: 'X-StarNet-Session-Id',
       surface: 'autonomous',
       max_concurrent_runs: maxConcurrent(),
+      capability_profiles: floCapabilities.catalog(),
       // deliberate follow-ups NOT in this slice (see docs/OPENAI_COMPAT.md):
       unsupported: ['responses_api', 'model_routes', 'cors', 'approvals']
     });
@@ -551,6 +561,10 @@ function makeOpenAiCompat(deps) {
       if (typeof body.instructions === 'string') system = body.instructions;
     }
 
+    let capabilityProfile;
+    try { capabilityProfile = floCapabilities.resolve(body.capability_profile); }
+    catch (error) { return json(res, 400, openAiError(error.message, { code: 'unknown_capability_profile', param: 'capability_profile' })); }
+    const capabilityGuard = floCapabilities.makeGuard(capabilityProfile);
     const runId = 'run_' + String(newId()).replace(/-/g, '');
     const modelField = String(body.model || DEFAULT_MODEL_ID);
     const target = resolveTarget(modelField);
@@ -558,25 +572,29 @@ function makeOpenAiCompat(deps) {
     const agentId = deriveAgentId(sessionId === runId ? '' : sessionId, target) || sanitizeAid(runId);
     const runModel = target.matched ? (target.model || defaultModel()) : defaultModel();
     const provider = target.provider || 'openrouter';
+    if (capabilityProfile && provider !== 'codex') return json(res, 400, openAiError('Flo capability profiles require a named ChatGPT OAuth worker.', { code: 'profile_requires_oauth', param: 'model' }));
     const messages = history.map(m => ({ role: m.role, content: m.content })).concat([{ role: 'user', content: lastUser }]);
     const sys = system || 'You are the Commander\'s StarNet agent, reached over an OpenAI-compatible API. Use your REAL tools when given a task and report what you actually did.';
 
     const ac = new AbortController();
     sweepRuns();
-    const rec = { status: 'queued', created: now(), updated: now(), sessionId, model: modelField, output: null, usage: null, error: null, events: [], subs: new Set(), closed: false, abort: ac, finishedAt: 0 };
+    const rec = { status: 'queued', created: now(), updated: now(), sessionId, model: modelField, capabilityProfile: capabilityProfile ? capabilityProfile.id : null, output: null, usage: null, error: null, events: [], subs: new Set(), closed: false, abort: ac, finishedAt: 0 };
     runs.set(runId, rec);
 
     // async task: drive the run; feed lifecycle events; record terminal status. Does NOT block the 202.
     // run.started is emitted by mapRunEvent when runOnce fires agent.run.start (single source — no duplicate).
     inFlight++;
     rec.status = 'running';
+    const profileTimer = capabilityProfile ? setTimeout(() => { capabilityGuard.exhaust('max_duration_ms'); ac.abort(new Error('Flo capability profile duration limit')); }, capabilityProfile.max_duration_ms) : null;
     startRun({
-      runId, agentId, model: runModel, provider, system: sys, messages, signal: ac.signal,
+      runId, agentId, model: runModel, provider, system: sys, messages, signal: ac.signal, capabilityGuard,
       onEvent: (name, p) => { const ev = mapRunEvent(name, p, runId, now()); if (ev) pushRunEvent(runId, ev); }
     }).then((acc) => {
       const usage = { prompt_tokens: acc.tokensIn, completion_tokens: acc.tokensOut, total_tokens: acc.tokensIn + acc.tokensOut };
-      const evName = runTerminalEvent(acc.reason);
-      const outcome = runOutcome(acc.reason, !!acc.buf, acc.errMsg && redact(acc.errMsg));
+      const finalReason = acc.capabilityReceipt && acc.capabilityReceipt.limit_reason ? 'max_iters' : acc.reason;
+      const evName = runTerminalEvent(finalReason);
+      const outcome = runOutcome(finalReason, !!acc.buf, acc.errMsg && redact(acc.errMsg));
+      if (acc.capabilityReceipt) outcome.capability_receipt = acc.capabilityReceipt;
       const term = { event: evName, run_id: runId, timestamp: now(), output: acc.buf, usage, starnet: outcome };
       rec.output = acc.buf; rec.usage = usage; rec.outcome = outcome;
       if (outcome.error) { term.error = outcome.error; rec.error = outcome.error; }
@@ -586,20 +604,21 @@ function makeOpenAiCompat(deps) {
       pushRunEvent(runId, { event: 'run.failed', run_id: runId, timestamp: now(), error: redact((e && e.message) || String(e)) });
       rec.error = redact((e && e.message) || String(e));
     }).then(() => {
+      if (profileTimer) clearTimeout(profileTimer);
       inFlight--;
       rec.closed = true; rec.finishedAt = now();
       // wake any live SSE subscribers so they close.
       for (const w of rec.subs) { try { w(null); } catch (_) {} }
     });
 
-    return json(res, 202, { run_id: runId, status: 'started' });
+    return json(res, 202, { run_id: runId, status: 'started', capability_profile: rec.capabilityProfile });
   }
 
   // ---- GET /v1/runs/{id} ------------------------------------------------------------------------------------
   function handleRunStatus(req, res, runId) {
     const r = runs.get(runId);
     if (!r) return json(res, 404, openAiError('Run not found: ' + runId, { code: 'run_not_found' }));
-    json(res, 200, { object: 'starnet.run', run_id: runId, status: r.status, created_at: r.created, updated_at: r.updated, session_id: r.sessionId, model: r.model, output: r.output, usage: r.usage, error: r.error, starnet: r.outcome || null });
+    json(res, 200, { object: 'starnet.run', run_id: runId, status: r.status, created_at: r.created, updated_at: r.updated, session_id: r.sessionId, model: r.model, capability_profile: r.capabilityProfile || null, output: r.output, usage: r.usage, error: r.error, starnet: r.outcome || null });
   }
 
   // ---- GET /v1/runs/{id}/events (SSE) -----------------------------------------------------------------------

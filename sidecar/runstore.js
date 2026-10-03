@@ -251,6 +251,7 @@
       const entry = {
         runId: str(e.runId), parentRunId: str(e.parentRunId).slice(0, 100), agentId: str(e.agentId),
         provider: str(e.provider).trim().slice(0, 60),
+        ...(e.capabilityProfile ? { capabilityProfile: str(e.capabilityProfile).slice(0, 40) } : {}),
         reason: REASONS.has(e.reason) ? e.reason : 'done',     // clamp to the known enum (matches agent.run.end)
         turns: num(e.turns), tokens: num(e.tokens), usd: num(e.usd),
         title: str(e.title).slice(0, TITLE_MAX),

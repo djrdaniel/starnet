@@ -99,3 +99,62 @@ Result contracts support bounded draft-07-style constraints including minimum, m
 oneOf, and local JSON Pointer references. Recursive/remote references and complex regex
 patterns are rejected explicitly. Schemas are bounded to 12,000 characters and structured
 results to 1 MiB for validation. No validator-unavailable fallback accepts unvalidated JSON.
+
+
+## Flo Company embedding and fixed execution profiles (2026-10-03)
+
+The station can be shown inside Flo without copying the station UI. Set
+`STARNET_FLO_FRAME_ORIGIN=http://127.0.0.1:8765` on the local station process to
+permit that exact ancestor alongside the station's own origin. Absent or invalid
+values retain `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'`. This is
+an embedding exception only: API origin, Host and token gates remain unchanged.
+The browser parent receives neither the station launch token nor the `/v1` key.
+
+Authenticated `GET /v1/capabilities` advertises `capability_profiles`. Flo must
+check this advertisement before starting work; older stations ignore unknown
+request fields and cannot prove the narrower envelope. On `POST /v1/runs`, send
+`capability_profile` with a named worker whose provider is `codex`:
+
+| Profile | Model tools | Tool dispatches | Model iterations | Duration |
+| --- | --- | --- | --- | --- |
+| `flo-text` | none | 0 | 1 | 180 seconds |
+| `flo-research` | `web_search`, `web_fetch` | 4 | 8 | 300 seconds |
+
+Unknown profiles fail before a run starts. The selected worker must retain its
+ChatGPT OAuth provider at host admission; no paid provider/model fallback is
+used. The fixed envelope narrows final capability grants and checks dispatch
+again, even on a Full Power worker. Profiled prompts use the caller's supplied
+text only: station persona, dossier, memory, private transcript recovery and
+custom hook context are not appended. Auxiliary learning calls are suppressed.
+
+Research uses keyless search and direct public HTTP(S) reads. It does not use
+OpenRouter search, Jina credentials, stored service keys, private connectors,
+filesystem/shell tools, or the browser reader fallback. Direct reads use GET,
+without cookies or credentials, validate DNS and every redirect, pin the
+validated address, and refuse private/loopback/link-local targets and URL user
+credentials. Failed reads receive no automatic tool retry. The caller may stop
+the run using its existing authenticated stop endpoint; the fixed duration
+also aborts in-flight work.
+
+Creation and status responses echo `capability_profile`. Terminal
+`starnet.capability_receipt` records the fixed limits, admitted tool calls,
+returned outcomes, blocked calls, tool trace and `public_web_evidence`. Successful
+public tool trace rows carry an `excerpt` of at most 6000 characters and each
+source carries at most 1000 characters of its actual returned page or search
+result block. Empty/throttled searches are labelled `search_no_results`; page
+refusals are labelled `fetch_no_content`. These outcomes do not count in
+`tools_ok` and never create successful source evidence. Evidence
+rows distinguish `search_result` from `read`; a bot wall is not a page read.
+They come from actual tool returns, not URLs claimed in the final prose. A
+fifth call or duration expiry produces a limited outcome with `completed:false`
+and a recorded limit cause. Flo remains responsible for saving the receipt,
+checking research sufficiency and coordinating separate named workers.
+
+Profiled interrupted runs cannot be continued through the station's generic
+recovery path, because that would widen the fixed envelope. Recover them in Flo
+with preserved evidence and an explicitly bounded new stage. `/v1/runs` records
+still have their documented in-memory lifecycle/expiry; this patch does not
+make creation idempotent or enable background routines, internal delegation,
+publishing, purchases or production control.
+
+Live bench verification also exposed a Node 20 DNS callback compatibility fault: `lookup` with `options.all=true` requires an address array. The pinned dispatcher now returns exactly the single already-verified public address in that requested form, retaining the address/family tuple for ordinary lookups. This restores direct public reads without widening DNS or redirect permissions; isolated IPv4/IPv6 callback and canonical SSRF tests cover both forms.

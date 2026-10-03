@@ -431,6 +431,11 @@
     const doFetch = (url, opts) => politeness.run(url, opts && opts.signal, () => rawFetch(url, opts));
     const UA = deps.userAgent || DEFAULT_UA;
     const or = deps.openrouter || null;
+    function checkedPublicUrl(value) {
+      const u = assertSafeUrl(value);
+      if (deps.publicOnly && (u.username || u.password)) throw new Error('public web research refuses URL credentials');
+      return u;
+    }
     // DNS-rebinding guard resolver: default to real Node DNS; pass deps.lookup:null to disable (tests).
     const doLookup = ('lookup' in deps) ? deps.lookup : nodeLookup;
     const makePinnedAgent = deps.agentFactory || (options => new undici.Agent(options));
@@ -441,7 +446,13 @@
     async function fetchPinned(u, init) {
       const address = await assertResolvedSafe(u, doLookup);
       const dispatcher = address ? makePinnedAgent({ connect: {
-        lookup(hostname, options, callback) { callback(null, address.address, address.family); }
+        lookup(hostname, options, callback) {
+          // Node 20's automatic address-family selection requests all:true and expects
+          // an array. Both callback forms expose only the single address vetted above;
+          // this is a socket pin, never a fresh DNS lookup or a wider address set.
+          if (options && options.all) callback(null, [{ address: address.address, family: address.family }]);
+          else callback(null, address.address, address.family);
+        }
       } }) : null;
       try {
         const r = await doFetch(u.href, dispatcher ? Object.assign({}, init, { dispatcher }) : init);
@@ -607,7 +618,7 @@
           headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml' }, redirect: 'manual', signal
         }), FETCH_TIMEOUT_MS, parent);
         if (res.status >= 300 && res.status < 400 && res.loc) {
-          const next = assertSafeUrl(new URL(res.loc, u.href).href);   // re-validate the redirect target
+          const next = checkedPublicUrl(new URL(res.loc, u.href).href);   // re-validate the redirect target
           await assertResolvedSafe(next, doLookup);
           u = next; continue;
         }
@@ -620,7 +631,7 @@
 
     // PUBLIC: returns { text, url, source }; throws only if both paths fail.
     async function webFetch(rawUrl, opts) {
-      const u = assertSafeUrl(rawUrl);
+      const u = checkedPublicUrl(rawUrl);
       await assertResolvedSafe(u, doLookup);   // refuse names that RESOLVE to private addresses (rebinding)
       const max = (opts && opts.maxChars) || FETCH_MAX_CHARS;
       const parent = opts && opts.signal;   // run/tool-timeout signal, threaded down so a cancel drops the fetch
@@ -747,9 +758,12 @@
     const fetchTool = {
       name: 'web_fetch', capability: 'web', scope: 'read', requiresConsent: false,
       timeoutMs: FETCH_TIMEOUT_MS + 20000 + (reader ? 45000 : 0),   // the reader rung needs Chrome boot + nav + settle
-      description: 'Fetch a web page by URL and return its main text content (cleaned). Use after web_search to read a result. ' +
-        'Bot-blocked and JavaScript-only pages are automatically retried through the station\'s own browser, so one call is enough. ' +
-        'If a page still cannot be read (dead link, site outage, verification wall) the result says so — that is information about the site, not a tool failure; use a different source rather than retrying the same URL.',
+      description: deps.publicOnly
+        ? 'Read public page text using a direct, keyless HTTP(S) GET without credentials or cookies. Use after web_search to read a result. ' +
+          'Bot-blocked and JavaScript-only pages may be unavailable; the result reports that limitation. Use another public source and state what could not be verified.'
+        : 'Fetch a web page by URL and return its main text content (cleaned). Use after web_search to read a result. ' +
+          'Bot-blocked and JavaScript-only pages are automatically retried through the station\'s own browser, so one call is enough. ' +
+          'If a page still cannot be read (dead link, site outage, verification wall) the result says so — that is information about the site, not a tool failure; use a different source rather than retrying the same URL.',
       schema: { type: 'object', required: ['url'], properties: { url: { type: 'string' } } },
       run: async (args, ctx) => {
         let out;
@@ -1059,5 +1073,5 @@
     };
   }
 
-  return { makeWebTools, makePoliteScheduler };
+  return { makeWebTools, makePoliteScheduler, assertSafeUrl };
 });

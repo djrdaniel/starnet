@@ -33,6 +33,7 @@ function cloneMessages(messages) {
 
 function checkpointWithPairedResults(state, options) {
   state = state || {};
+  if (state.meta && state.meta.capabilityProfile) fail('Flo profiled runs must be recovered in Flo; station continuation cannot widen their fixed envelope.');
   // A lone torn FINAL record (damage 'torn_tail') is the ordinary crash signature: that record never became
   // durable, so its hash-chain-valid prefix continues exactly like an intact journal. Every other damage class,
   // a repair that failed, or a forensic sibling on disk stays forensic-only.
