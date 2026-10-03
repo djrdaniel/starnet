@@ -113,6 +113,71 @@ const QUIET = { SKYNET_THREAD_MINE: '0', SKYNET_SKILL_REVIEW: '0', SKYNET_SKILL_
 const CRED = { SKYNET_OPENROUTER_KEY: 'sk-or-v1-questrefresh-fake', SKYNET_DEFAULT_MODEL: 'test/model' };
 
 (async () => {
+  /* ===== OWNER DIRECTION: immediate adoption, zero planning or autonomy changes ===== */
+  {
+    const mock = await startMock('NONE');
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-qrefresh-owner-goal-'));
+    seedEvidence(ws); seedAutonomy(ws, 'wait');
+    const refreshFile = path.join(ws, '_station.questrefresh.json');
+    const seededState = {
+      v: 1, lastCycleAt: 123, lastMintAt: 100, contextKey: 'retained-context',
+      northStar: { text: 'Earlier confirmed direction', groundedIn: 'earlier user choice', at: 10, source: 'goal', status: 'adopted' },
+      proposedNorthStar: { text: 'Build and refine Flo departmental draft workflows', groundedIn: 'model guess', at: 20, source: 'model', status: 'proposed' },
+      pendingQuests: [{ title: 'Unconfirmed engineering quest', desc: 'A staged guess.', reward: '', contract: { type: 'attest', key: '' }, steps: [], groundedIn: 'model guess' }],
+      declinedNorthStars: ['previously declined guess'],
+      ledger: [{ at: 123, outcome: 'staged', reason: 'waiting for owner direction', title: 'Unconfirmed engineering quest' }]
+    };
+    fs.writeFileSync(refreshFile, JSON.stringify({ v: 1, state: seededState }));
+    let child = null;
+    try {
+      const up = await boot(8985 + (process.pid % 10), Object.assign({ SKYNET_WORKSPACES: ws, SKYNET_OPENROUTER_BASE: mock.base }, CRED, QUIET), 20);
+      child = up.child;
+      const base = 'http://' + HOST + ':' + up.port, token = await bootToken(base, base);
+      const headers = { Origin: base, 'X-StarNet-Token': token, 'Content-Type': 'application/json' };
+      const status = async () => (await fetch(base + '/api/quests/refresh', { headers })).json();
+      const post = async goal => (await fetch(base + '/api/goals', { method: 'POST', headers, body: JSON.stringify({ goal }) })).json();
+      const preserved = new Map(['_commander.autonomy.json', '_commander.dossier.json'].map(name => [name, fs.readFileSync(path.join(ws, name), 'utf8')]));
+      const goal = { id: 'owner-income-goal', text: 'Fund DJR through original digital products and evidenced low-outlay income routes on Etsy, itch and other suitable platforms; Flo is the project hub and assistant.', done: 0, total: 1, pct: 0, next: 'Review the researched product experiment', milestoneId: 'owner-income-goal:m1' };
+      const before = fs.readFileSync(refreshFile, 'utf8');
+      const refused = await fetch(base + '/api/goals', { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json', Authorization: 'Bearer external-worker-key' }, body: JSON.stringify({ goal }) });
+      A.eq(refused.status, 403, 'external worker credentials do not grant owner-goal mutation');
+      A.eq(fs.readFileSync(refreshFile, 'utf8'), before, 'unauthenticated goal cannot replace pending direction');
+      const response = await post(goal);
+      A.ok(response.ok, 'explicit owner-goal mirror is accepted');
+      A.eq(response.goal, goal, 'goal progress and next milestone remain exactly the supplied owner state');
+      const st = await status();
+      A.eq(st.northStar.text, goal.text, 'owner goal becomes visible immediately without a planning run');
+      A.eq(st.northStar.source, 'goal', 'direction is labelled as the owner goal, not inferred');
+      A.eq(st.northStar.status, 'adopted', 'explicit owner direction needs no model proposal confirmation');
+      A.eq(st.northStarProposed, false, 'the stale inferred proposal no longer takes visual precedence');
+      const saved = JSON.parse(fs.readFileSync(refreshFile, 'utf8')).state;
+      A.eq(saved.proposedNorthStar, null, 'stale proposal is cleared durably');
+      A.eq(saved.pendingQuests, [], 'unconfirmed inferred quest candidates are cleared rather than minted');
+      for (const key of ['ledger', 'declinedNorthStars', 'lastCycleAt', 'lastMintAt', 'contextKey']) A.eq(saved[key], seededState[key], key + ' is preserved');
+      for (const [name, contents] of preserved) A.eq(fs.readFileSync(path.join(ws, name), 'utf8'), contents, name + ' remains byte-identical');
+      A.eq((await (await fetch(base + '/api/quests', { headers })).json()).quests, [], 'saving a goal starts no work or quests');
+      await sleep(3800); // cross the real boot tick at WAIT: adopting a goal never grants initiative.
+      A.eq(mock.calls.model, 0, 'owner-goal adoption and the subsequent WAIT boot tick make zero model requests');
+      A.eq((await status()).inFlight, false, 'saving direction does not launch quest planning');
+      await post(null);
+      A.eq((await status()).northStar.text, goal.text, 'clearing the active summary does not erase an adopted direction or history');
+      await post({ text: '   ', done: 0, total: 0 });
+      A.eq((await status()).northStar.text, goal.text, 'blank goal text cannot erase or replace the existing direction');
+      await post(goal);
+      child.kill(); await new Promise(resolve => child.once('exit', resolve)); child = null;
+      const restarted = await boot(8985 + (process.pid % 10), Object.assign({ SKYNET_WORKSPACES: ws, SKYNET_OPENROUTER_BASE: mock.base }, CRED, QUIET), 20);
+      child = restarted.child;
+      const restartBase = 'http://' + HOST + ':' + restarted.port, restartToken = await bootToken(restartBase, restartBase);
+      const after = await (await fetch(restartBase + '/api/quests/refresh', { headers: { Origin: restartBase, 'X-StarNet-Token': restartToken } })).json();
+      A.eq(after.northStar.text, goal.text, 'the owner direction survives a sidecar restart');
+      A.eq(after.northStarProposed, false, 'restart does not resurrect the stale model proposal');
+      A.eq(mock.calls.model, 0, 'restart does not need a model request to restore owner direction');
+    } finally {
+      if (child) { child.kill(); await new Promise(resolve => child.once('exit', resolve)); }
+      mock.server.close(); fs.rmSync(ws, { recursive: true, force: true });
+    }
+  }
+
   /* ===== RESTART WAIT: no background provider call or quest mutation; manual refresh survives ===== */
   {
     const mock = await startMock([

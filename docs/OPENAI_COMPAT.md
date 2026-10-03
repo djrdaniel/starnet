@@ -180,3 +180,25 @@ conflict/legacy-copy preservation, successful current-cache adoption, failed rea
 cache-write/read-back failures, unknown saves and unload saves. No station layout,
 conversation history, credentials, publishing or spending permissions are changed
 by these source fixes.
+
+
+### Owner direction inside the Flo station (3 October 2026)
+
+The existing authenticated `POST /api/goals` mirror now adopts the Commander's
+confirmed or focused goal as the station north star immediately. It labels that
+direction `source: goal`, supersedes a pending inferred proposal, and clears only
+its staged, unconfirmed quest candidates. Existing quest history, refresh receipts,
+declined directions, autonomy settings and station state remain intact. A blank or
+cleared active summary does not erase the already adopted direction.
+
+Saving the direction does not call a model, refresh quests, mint work, change
+initiative or complete any income milestone. The native Goals form remains the
+owner of the browser's goal tree; setting only the sidecar mirror is insufficient
+because that tree is mirrored again on resume. An earlier incorrect proposal can
+be declined through its existing `Not quite` action before the owner goal replaces
+it, preserving the recommendation verdict as well.
+
+Validation: the real-host quest-refresh test covers immediate owner adoption,
+stale-proposal/candidate removal, preserved receipts and permissions, rejected
+external-worker credentials, zero model calls, and restart persistence. This
+source patch does not change the real workspace's goal, layout or history.

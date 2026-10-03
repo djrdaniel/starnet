@@ -15231,6 +15231,16 @@ async function handleGoals(req, res) {
   try { body = JSON.parse(await readBody(req, 1 << 16)); }
   catch (e) { res.writeHead(400); return res.end('bad json'); }
   commanderGoals.set(body && body.goal);
+  // This token-guarded route mirrors the Commander's confirmed/focused goal.
+  // Adopt that explicit direction immediately: it outranks a pending model
+  // inference. Saving direction never refreshes quests, mints work, or runs AI.
+  const goal = commanderGoals.get();
+  if (goal && String(goal.text || '').trim()) {
+    questRefreshState = QuestRefresh.clearPendingQuests(QuestRefresh.setNorthStar(
+      questRefreshState, { text: goal.text, groundedIn: 'the Commander\'s active goal arc', source: 'goal' }, { now: Date.now() }
+    ));
+    persistQuestRefresh();
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, goal: commanderGoals.get() }));
 }
