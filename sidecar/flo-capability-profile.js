@@ -60,7 +60,7 @@ function makeGuard(profile) {
     if (name === 'web_fetch') {
       // A refusal is a returned informational tool response, not a fetched public page.
       if (!/^[1-9]\d* chars via /.test(row.summary) || !row.url) { row.status = 'fetch_no_content'; return; }
-      row.excerpt = content.slice(0, 6000);
+      row.excerpt = content.slice(0, 8000);
       sources.push({ url: row.url, kind: 'page', excerpt: content.slice(0, 1000), sequence });
     } else if (name === 'web_search') {
       // Keyless engines report throttling/empty results as non-error answers. Preserve that
@@ -73,7 +73,7 @@ function makeGuard(profile) {
         if (url) publicResults.push({ url, kind: 'search_result', excerpt: block.slice(0, 1000), sequence });
       }
       if (!publicResults.length) { row.status = 'search_no_results'; return; }
-      row.excerpt = content.slice(0, 6000);
+      row.excerpt = content.slice(0, 8000);
       for (const source of publicResults) if (!sources.some(s => s.url === source.url && s.kind === 'search_result')) sources.push(source);
     }
   }

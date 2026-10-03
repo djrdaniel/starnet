@@ -45,9 +45,18 @@ A.eq(empty.receipt().tools_ok,0,'empty searches do not count as successful evide
 A.eq(empty.receipt().sources,[],'engine advice URLs are never counted as result evidence');
 A.ok(empty.receipt().tool_trace.every(r=>!r.excerpt),'empty searches carry no invented public excerpt');
 const bounded=P.makeGuard(P.resolve('flo-research'));const bc=bounded.start('web_fetch',{url:'https://example.com/long'});
-bounded.finish(bc.sequence,'web_fetch',{}, {ok:true,summary:'8000 chars via direct',content:'x'.repeat(8000)});
-A.eq(bounded.receipt().tool_trace[0].excerpt.length,6000,'tool excerpt has a fixed 6000 character bound');
+bounded.finish(bc.sequence,'web_fetch',{}, {ok:true,summary:'10000 chars via direct',content:'x'.repeat(10000)});
+A.eq(bounded.receipt().tool_trace[0].excerpt.length,8000,'tool excerpt has a fixed 8000 character bound');
 A.eq(bounded.receipt().sources[0].excerpt.length,1000,'source excerpt has a fixed 1000 character bound');
+const fence=require('../sidecar/tools/fence.js');
+const actualPage='x'.repeat(5940)+'PUBLIC_PAGE_TAIL_CURRENCY_USD';
+const actualContent=fence.fenceExternal(actualPage,'page text from https://example.com/facts');
+A.ok(actualContent.indexOf('PUBLIC_PAGE_TAIL_CURRENCY_USD')>6000,'real fence/header pushes the page tail beyond the old receipt bound');
+const complete=P.makeGuard(P.resolve('flo-research'));const cc=complete.start('web_fetch',{url:'https://example.com/facts'});
+complete.finish(cc.sequence,'web_fetch',{}, {ok:true,summary:actualPage.length+' chars via direct',content:actualContent});
+A.eq(complete.receipt().tool_trace[0].excerpt,actualContent,'receipt retains the complete bounded tool result with its source framing');
+A.ok(complete.receipt().tool_trace[0].excerpt.includes('PUBLIC_PAGE_TAIL_CURRENCY_USD'),'QA receipt retains actual facts at the end of a bounded page');
+
 
 const failed=P.makeGuard(P.resolve('flo-research')); const call=failed.start('web_fetch',{url:'https://example.com/private'});
 failed.finish(call.sequence,'web_fetch',{}, {ok:true,summary:'site declined (403)',content:'No readable content'});

@@ -139,7 +139,8 @@ also aborts in-flight work.
 Creation and status responses echo `capability_profile`. Terminal
 `starnet.capability_receipt` records the fixed limits, admitted tool calls,
 returned outcomes, blocked calls, tool trace and `public_web_evidence`. Successful
-public tool trace rows carry an `excerpt` of at most 6000 characters and each
+public tool trace rows carry an `excerpt` of at most 8000 characters (including
+the source header and external-data fence around the reader's bounded page text) and each
 source carries at most 1000 characters of its actual returned page or search
 result block. Empty/throttled searches are labelled `search_no_results`; page
 refusals are labelled `fetch_no_content`. These outcomes do not count in
