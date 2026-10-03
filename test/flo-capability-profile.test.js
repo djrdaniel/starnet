@@ -7,6 +7,10 @@ const all = { tools: ['fs.read', 'shell.exec', 'web_search', 'web_fetch', 'web_r
   deferred: ['fs.read', 'web_fetch'], grants: [{tool:'fs.read'},{tool:'web_fetch'}],
   approvalRules: {'fs.read':{},'web_fetch':{}}, networkCaps: {'web_fetch':true, 'mcp:private':true} };
 A.eq(P.resolve(undefined), null, 'omitted profile preserves legacy runs');
+A.eq(P.resolve('flo-text').max_duration_ms,600000,'text work has a fixed ten-minute host deadline');
+A.eq(P.resolve('flo-text').max_iterations,1,'longer text deadline retains one iteration');
+A.eq(P.resolve('flo-text').max_tool_calls,0,'longer text deadline retains zero tool calls');
+A.eq(P.resolve('flo-research').max_duration_ms,300000,'research keeps its fixed five-minute deadline');
 for (const id of ['',null,'full','flo-research ',{},'__proto__']) A.throws(() => P.resolve(id), 'unknown profile rejects before run');
 A.eq(P.restrict(all, P.resolve('flo-text')).tools, [], 'text schema has zero tools');
 const narrowed=P.restrict(all,P.resolve('flo-research'));

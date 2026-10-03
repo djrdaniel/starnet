@@ -21,7 +21,7 @@ const {makeOpenAiCompat}=require('../sidecar/openai-compat');
  try {
   assert.equal((await fetch(base+'/v1/capabilities')).status,401,'capabilities requires bearer');
   const caps=await(await fetch(base+'/v1/capabilities',{headers})).json();
-  assert.equal(caps.capability_profiles.length,2);assert.deepEqual(caps.capability_profiles[1].tools,['web_search','web_fetch']);
+  assert.equal(caps.capability_profiles.length,2);assert.equal(caps.capability_profiles[0].max_duration_ms,600000);assert.equal(caps.capability_profiles[1].max_duration_ms,300000);assert.deepEqual(caps.capability_profiles[1].tools,['web_search','web_fetch']);
   for(const p of ['full',null,'']) {assert.equal((await post({input:'task',model:'RESEARCH',capability_profile:p})).status,400);}
   assert.equal(calls.length,0,'unknown profiles never dispatch');
   assert.equal((await post({input:'task',capability_profile:'flo-research'})).status,400,'unnamed non-OAuth worker is refused');
@@ -29,7 +29,7 @@ const {makeOpenAiCompat}=require('../sidecar/openai-compat');
    const started=await(await post({input:'task',model:'RESEARCH',capability_profile:profile})).json();assert.equal(started.capability_profile,profile);
    await(await fetch(base+'/v1/runs/'+started.run_id+'/events',{headers})).text();
    const state=await(await fetch(base+'/v1/runs/'+started.run_id,{headers})).json();
-   assert.equal(state.capability_profile,profile);assert.equal(state.starnet.capability_receipt.capability_profile,profile);
+   assert.equal(state.capability_profile,profile);assert.equal(state.starnet.capability_receipt.capability_profile,profile);assert.equal(state.starnet.capability_receipt.limits.max_duration_ms,profile==='flo-text'?600000:300000);
    const o=calls.at(-1);assert.equal(o.provider,'codex');assert.equal(o.surface,'autonomous');assert.equal(o.reflect,false);assert.deepEqual(o.fallbackModels,[]);assert.deepEqual(o.fallbackProviders,[]);
    assert.equal(o.isTask,profile==='flo-research');assert.equal(o.maxIters,profile==='flo-research'?8:1);
    if(profile==='flo-research'){assert.equal(state.status,'limited');assert.equal(state.starnet.completed,false);assert.equal(state.starnet.capability_receipt.tool_calls,4);assert.equal(state.starnet.capability_receipt.tool_trace[0].excerpt,'Evidence actually returned');assert.equal(state.starnet.capability_receipt.sources[0].excerpt,'Evidence actually returned');}

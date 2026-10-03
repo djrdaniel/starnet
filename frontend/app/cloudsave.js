@@ -406,7 +406,18 @@ const CloudSave = (() => {
     const confirmed = await flush({ force: true });
     if (pending || activeFlushes.size) throw new Error('This window changed while saving. Try reloading again after your work finishes.');
     if (!confirmed && !conflict) throw new Error('Could not preserve this window. Download its save before reloading.');
-    localStorage.removeItem('starnet.save');
+    // Keep a current cache entry across reload. Removing it lets the first-load
+    // legacy migration resurrect a retained skynet.save rollback snapshot, putting
+    // this window straight back into the same conflict after an otherwise safe reload.
+    const preservedLocal = latestLocal;
+    const current = await pull();
+    if (pending || activeFlushes.size || latestLocal !== preservedLocal) throw new Error('This window changed while loading the current station. Try reloading again after your work finishes.');
+    if (!isSave(current) || isFutureSave(current)) throw new Error('Could not read the current station safely. This window remains preserved; retry when the station is reachable.');
+    const raw = JSON.stringify({ ...current, _saveDirty: false });
+    try {
+      localStorage.setItem('starnet.save', raw);
+      if (localStorage.getItem('starnet.save') !== raw) throw new Error('cache write was not confirmed');
+    } catch (_) { throw new Error('Could not cache the current station. This window remains preserved; reload was cancelled.'); }
     location.reload();
   }
   return { localSnapshot: () => latestLocal, reloadCurrent, revision: () => revision, push, pull, reconcile, flush, flushForUpdate, installUnloadFlush, health: healthNow, isFutureSentinel, isUnknownSentinel, markDegraded, recoveryNotice, lineage, ackRecovery, pullOutcome: () => lastPullOutcome, _isSave: isSave, _isFutureSave: isFutureSave };

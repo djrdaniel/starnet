@@ -6,12 +6,15 @@ const store = makeSaveStore({ fs, pathMod: path, root, clock: { now: () => Date.
 const source = fs.readFileSync(path.join(__dirname, '../frontend/app/cloudsave.js'), 'utf8');
 const base = { schema: 'starnet.save', version: 6, updatedAt: 1, agent: { id: 'agent' }, workstreams: [] };
 store.save('agent', base, { compareRevision: true });
-function client({ beforePost = async () => {}, onReload = () => {}, cache = new Map() } = {}) {
+function client({ beforePost = async () => {}, onReload = () => {}, cache = new Map(), readStatus = () => 200 } = {}) {
   const context = { console, module: { exports: {} }, require: () => require('../frontend/app/cloudsavecore.js'), setTimeout, clearTimeout, AbortController,
     location: { reload: onReload },
     localStorage: { getItem: k => cache.get(k) || null, setItem: (k,v) => cache.set(k,v), removeItem: k => cache.delete(k) },
     Save: { CURRENT: 6, load: () => JSON.parse(cache.get('starnet.save') || 'null') },
-    fetch: async (url, opts) => { if (opts?.method === 'POST') await beforePost(); return { ok: true, json: async () => opts?.method === 'POST' ? store.save('agent', JSON.parse(opts.body), { compareRevision: true }) : { save: structuredClone(store.load('agent')) } }; } };
+    fetch: async (url, opts) => {
+      if (opts?.method === 'POST') { await beforePost(); return { ok: true, json: async () => store.save('agent', JSON.parse(opts.body), { compareRevision: true }) }; }
+      const status = readStatus(); return { ok: status === 200, status, json: async () => ({ save: structuredClone(store.load('agent')) }) };
+    } };
   vm.runInNewContext(source, context); return context.module.exports;
 }
 (async () => {
@@ -99,6 +102,70 @@ function client({ beforePost = async () => {}, onReload = () => {}, cache = new 
     recovered.workstreams.push({ id: 'after-immediate-reload' }); afterReload.push(recovered);
     assert.equal(await afterReload.flush({ force: true }), true, 'next autosave uses the durable revision after immediate reload');
     assert.equal(afterReload.health().conflict, null);
-    console.log('cloudsave-concurrency: two clients, conflict export, update refusal, offline restart and queued cache acknowledgements PASS');
+
+    // A successful conflict reload adopts the durable document instead of deleting
+    // the cache and allowing the retained legacy rollback key to resurrect the conflict.
+    const LegacyMigrate = require('../frontend/app/legacymigrate.js');
+    function storageOf(cache) { return { get length() { return cache.size; }, key: i => Array.from(cache.keys())[i], getItem: k => cache.get(k) || null, setItem: (k,v) => cache.set(k,v) }; }
+    async function conflicted(options = {}) {
+      const cache = options.cache || new Map(), recovery = client({ ...options, cache });
+      const old = await recovery.reconcile(null);
+      const next = structuredClone(store.load('agent')); next.updatedAt++; next.workstreams.push({ id: 'newer-durable-window' });
+      assert.equal(store.save('agent', next, { compareRevision: true }).ok, true);
+      old.updatedAt += 100; old._saveDirty = true; old.workstreams.push({ id: 'preserved-conflicting-window' });
+      cache.set('starnet.save', JSON.stringify(old)); cache.set('skynet.save', JSON.stringify(old));
+      recovery.push(old); assert.equal(await recovery.flush({ force: true }), false);
+      const backup = path.join(root, recovery.health().conflict.recovery);
+      assert.ok(fs.existsSync(backup), 'server confirms a durable preserved conflict copy before reload');
+      return { recovery, cache, backup };
+    }
+    let successfulReloads = 0;
+    const recoveredWindow = await conflicted({ onReload: () => successfulReloads++ });
+    const oldRollback = recoveredWindow.cache.get('skynet.save');
+    const preservedConflict = fs.readFileSync(recoveredWindow.backup, 'utf8');
+    await recoveredWindow.recovery.reloadCurrent();
+    assert.equal(successfulReloads, 1, 'reload proceeds only after current cache adoption');
+    const adopted = JSON.parse(recoveredWindow.cache.get('starnet.save'));
+    assert.deepEqual(adopted.workstreams, store.load('agent').workstreams, 'reload cache contains the current durable work');
+    assert.equal(adopted._saveRevision, store.load('agent')._saveRevision, 'reload cache retains the fresh durable revision');
+    assert.equal(adopted._saveDirty, false, 'reload cache is a confirmed clean durable snapshot');
+    assert.equal(recoveredWindow.cache.get('skynet.save'), oldRollback, 'legacy rollback key remains byte-identical');
+    assert.equal(fs.readFileSync(recoveredWindow.backup, 'utf8'), preservedConflict, 'conflict backup remains byte-identical');
+    assert.equal(LegacyMigrate.run(storageOf(recoveredWindow.cache)), 0, 'legacy boot cannot resurrect its stale save over current cache');
+    const afterRecovery = client({ cache: recoveredWindow.cache });
+    await afterRecovery.reconcile(adopted);
+    assert.equal(afterRecovery.health().conflict, null, 'next boot adopts current work without reopening the old conflict');
+
+    let unavailable = false, failedReloads = 0;
+    const readFailed = await conflicted({ readStatus: () => unavailable ? 503 : 200, onReload: () => failedReloads++ });
+    const failedCache = readFailed.cache.get('starnet.save'), failedBackup = fs.readFileSync(readFailed.backup, 'utf8');
+    unavailable = true;
+    await assert.rejects(readFailed.recovery.reloadCurrent(), /Could not read the current station safely/, 'failed durable read cancels reload');
+    assert.equal(failedReloads, 0);
+    assert.equal(readFailed.cache.get('starnet.save'), failedCache, 'failed pull retains this window cache');
+    assert.equal(fs.readFileSync(readFailed.backup, 'utf8'), failedBackup, 'failed pull retains the preserved conflict');
+
+    class FailingCache extends Map { set(k,v) { if (this.fail && k === 'starnet.save') throw Error('cache unavailable'); return super.set(k,v); } }
+    const failingCache = new FailingCache(); let cacheFailedReloads = 0;
+    const writeFailed = await conflicted({ cache: failingCache, onReload: () => cacheFailedReloads++ });
+    const unchangedCache = failingCache.get('starnet.save'), unchangedBackup = fs.readFileSync(writeFailed.backup, 'utf8');
+    failingCache.fail = true;
+    await assert.rejects(writeFailed.recovery.reloadCurrent(), /Could not cache the current station/, 'failed cache write cancels reload');
+    assert.equal(cacheFailedReloads, 0);
+    assert.equal(failingCache.get('starnet.save'), unchangedCache, 'failed cache adoption preserves the original cache');
+    assert.equal(fs.readFileSync(writeFailed.backup, 'utf8'), unchangedBackup, 'failed cache adoption preserves the conflict backup');
+
+    class SilentCache extends Map { set(k,v) { if (this.fail && k === 'starnet.save') return this; return super.set(k,v); } }
+    const silentCache = new SilentCache(); let unconfirmedReloads = 0;
+    const unconfirmed = await conflicted({ cache: silentCache, onReload: () => unconfirmedReloads++ });
+    const unconfirmedCache = silentCache.get('starnet.save'), unconfirmedBackup = fs.readFileSync(unconfirmed.backup, 'utf8');
+    silentCache.fail = true;
+    await assert.rejects(unconfirmed.recovery.reloadCurrent(), /Could not cache the current station/, 'unconfirmed cache read-back cancels reload');
+    assert.equal(unconfirmedReloads, 0);
+    assert.equal(silentCache.get('starnet.save'), unconfirmedCache, 'unconfirmed adoption retains the original cache');
+    assert.equal(fs.readFileSync(unconfirmed.backup, 'utf8'), unconfirmedBackup, 'unconfirmed adoption retains the conflict backup');
+    console.log('cloudsave-concurrency: causal writes, preserved conflicts, current reload adoption, legacy rollback and fail-closed recovery PASS');
+
+
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

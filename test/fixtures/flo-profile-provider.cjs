@@ -2,6 +2,10 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'), original=globalThis.fetch;
 const counts=new Map(),ws=process.env.STARNET_WORKSPACES;
+// Invoke the real host deadline promptly only in the dedicated hanging-provider
+// scenario, preserving the exact advertised 600000ms limit without a long test wait.
+const actualSetTimeout=global.setTimeout,profileDeadlines=[];
+global.setTimeout=(fn,ms,...args)=>{const timer=actualSetTimeout(fn,ms,...args);if(ms===600000)profileDeadlines.push({fn,args,timer});return timer;};
 require('node:dns').promises.lookup=async()=>[{address:'93.184.216.34',family:4}];
 require('undici').fetch=async(url,init)=>{
  fs.appendFileSync(path.join(ws,'test-web.jsonl'),JSON.stringify({url:String(url),method:(init||{}).method||'GET',headers:Object.keys((init||{}).headers||{})})+'\n');
@@ -11,9 +15,13 @@ require('undici').fetch=async(url,init)=>{
 globalThis.fetch=async(url,init)=>{
  if(String(url).startsWith('https://chatgpt.com/backend-api/codex/')) {
   if(String(url).includes('/models'))return new Response(JSON.stringify({models:[]}));
-  const body=JSON.parse(init.body), all=JSON.stringify(body), mode=all.includes('PROFILE_LIMIT')?'limit':all.includes('PROFILE_DENY')?'deny':all.includes('PROFILE_TAIL')?'tail':all.includes('PROFILE_SEARCH')?'search':all.includes('PROFILE_RESEARCH')?'research':'text';
+  const body=JSON.parse(init.body), all=JSON.stringify(body), mode=all.includes('PROFILE_LIMIT')?'limit':all.includes('PROFILE_DENY')?'deny':all.includes('PROFILE_DURATION')?'duration':all.includes('PROFILE_TAIL')?'tail':all.includes('PROFILE_SEARCH')?'search':all.includes('PROFILE_RESEARCH')?'research':'text';
   const n=counts.get(mode)||0;counts.set(mode,n+1);
   fs.appendFileSync(path.join(ws,'test-model.jsonl'),JSON.stringify({mode,tools:(body.tools||[]).map(t=>t.name),privateLeak:all.includes('PRIVATE_STATION_SENTINEL')})+'\n');
+  if(mode==='duration')return new Promise((resolve,reject)=>{
+   init.signal.addEventListener('abort',()=>{fs.appendFileSync(path.join(ws,'test-duration.jsonl'),JSON.stringify({aborted:true})+'\n');reject(init.signal.reason||new Error('aborted'));},{once:true});
+   actualSetTimeout(()=>{const deadline=profileDeadlines.at(-1);if(!deadline)throw Error('host text deadline not installed');clearTimeout(deadline.timer);deadline.fn(...deadline.args);},20);
+  });
   const events=[], call=(name,args,i)=>{
    events.push({type:'response.output_item.added',output_index:i,item:{type:'function_call',call_id:'call_'+mode+'_'+n+'_'+i,name}});
    events.push({type:'response.function_call_arguments.delta',output_index:i,delta:JSON.stringify(args)});

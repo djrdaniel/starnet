@@ -3,7 +3,7 @@
 'use strict';
 const { assertSafeUrl } = require('./tools/builtin/web.js');
 const PROFILES = Object.freeze({
-  'flo-text': Object.freeze({ id: 'flo-text', tools: Object.freeze([]), max_tool_calls: 0, max_iterations: 1, max_duration_ms: 180000 }),
+  'flo-text': Object.freeze({ id: 'flo-text', tools: Object.freeze([]), max_tool_calls: 0, max_iterations: 1, max_duration_ms: 600000 }),
   'flo-research': Object.freeze({ id: 'flo-research', tools: Object.freeze(['web_search', 'web_fetch']), max_tool_calls: 4, max_iterations: 8, max_duration_ms: 300000 })
 });
 function resolve(value) {

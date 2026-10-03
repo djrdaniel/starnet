@@ -117,7 +117,7 @@ request fields and cannot prove the narrower envelope. On `POST /v1/runs`, send
 
 | Profile | Model tools | Tool dispatches | Model iterations | Duration |
 | --- | --- | --- | --- | --- |
-| `flo-text` | none | 0 | 1 | 180 seconds |
+| `flo-text` | none | 0 | 1 | 600 seconds (10 minutes) |
 | `flo-research` | `web_search`, `web_fetch` | 4 | 8 | 300 seconds |
 
 Unknown profiles fail before a run starts. The selected worker must retain its
@@ -159,3 +159,24 @@ make creation idempotent or enable background routines, internal delegation,
 publishing, purchases or production control.
 
 Live bench verification also exposed a Node 20 DNS callback compatibility fault: `lookup` with `options.all=true` requires an address array. The pinned dispatcher now returns exactly the single already-verified public address in that requested form, retaining the address/family tuple for ordinary lookups. This restores direct public reads without widening DNS or redirect permissions; isolated IPv4/IPv6 callback and canonical SSRF tests cover both forms.
+
+### 2026-10-03 integration provenance
+
+A live Product Lead draft reached the former 180-second text deadline and remained
+an unaccepted failed result. The fixed text allowance is now ten minutes while
+retaining one model iteration, zero tools, and the selected worker's saved OAuth,
+model, reasoning and approval settings. Research retains its five-minute envelope;
+the failed draft is not automatically retried by this change.
+
+Conflict recovery preserves the current window through the durable conflict-save
+path, then fresh-reads and verifies the current durable document in the browser
+cache before reload. Legacy rollback keys and conflict copies remain intact.
+Recovery cancels on a failed read, an unconfirmed cache write, or a concurrent edit.
+This prevents a removed cache key from being refilled with an older legacy save.
+
+Targeted validation covers current capability advertisement and receipts, actual
+host cancellation reaching a hanging OAuth request without an extra model call,
+conflict/legacy-copy preservation, successful current-cache adoption, failed reads,
+cache-write/read-back failures, unknown saves and unload saves. No station layout,
+conversation history, credentials, publishing or spending permissions are changed
+by these source fixes.
