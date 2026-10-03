@@ -27,12 +27,18 @@ function makeConsentWait(deps) {
   const setT = deps.setTimeoutFn || setTimeout;
   const clearT = deps.clearTimeoutFn || clearTimeout;
   const emitPrompt = deps.emitPrompt;           // (promptId) => emit the permission.prompt event
+  // Optional owner read-model metadata. It belongs to this exact finisher and
+  // disappears with it; no second pending queue can retain an expired approval.
+  const now = typeof deps.now === 'function' ? deps.now : null;
+  const description = deps.description || null;
 
   // ask() returns a Promise<decision string>; the registered finisher carries .extend() for the ack route.
   function ask() {
     return new Promise((resolve) => {
       const promptId = uuid();
       let settled = false, timer = null, extended = false;
+      const createdAt = now ? now() : null;
+      let expiresAt = createdAt == null ? null : createdAt + timeoutMs;
       function onAbort() { finish('deny'); }
       function finish(decision) {
         if (settled) return; settled = true;
@@ -45,9 +51,14 @@ function makeConsentWait(deps) {
       finish.extend = function () {
         if (settled || extended) return false;
         extended = true;
+        expiresAt = now ? now() + extendMs : null;
         if (timer) clearT(timer);
         timer = setT(() => finish('deny'), extendMs);
         return true;
+      };
+      finish.snapshot = function () {
+        if (settled || !description) return null;
+        return Object.assign({}, description, { promptId, createdAt, expiresAt, displayed: extended });
       };
       pending.set(promptId, finish);
       if (signal.aborted) return finish('deny');

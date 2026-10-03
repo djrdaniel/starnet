@@ -101,7 +101,28 @@
   }
   function key() { try { return (root && root.__STARNET_API_TOKEN__) ? String(root.__STARNET_API_TOKEN__) : ''; } catch (_) { return ''; } }
   function base() { try { return (root && root.__STARNET_API__) ? String(root.__STARNET_API__) : ''; } catch (_) { return ''; } }
-  function mint(kind, scope) { const k = key(); if (!k) return ''; try { return mintWith(k, kind, scope, Date.now(), randomHex(16)); } catch (_) { return ''; } }
+  // A Windows webview and its WSL sidecar can have different wall clocks. Tickets
+  // are verified on the sidecar, so anchor their short lifetimes to that server's
+  // HTTP Date and advance with monotonic page time. Never widen server TTL/skew.
+  let clockAnchor = null, clockFlight = null;
+  function monotonicNow() { try { return root.performance.now(); } catch (_) { return Date.now(); } }
+  function ticketNow() { return clockAnchor ? clockAnchor.serverMs + Math.max(0, monotonicNow() - clockAnchor.pageMs) : Date.now(); }
+  function refreshClock(timeoutMs) {
+    if (clockFlight) return clockFlight;
+    if (!root || typeof root.fetch !== 'function') return Promise.resolve(false);
+    const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
+    let ac = null, timer = null;
+    try { ac = new AbortController(); timer = setTimeout(() => ac.abort(), budget); } catch (_) {}
+    clockFlight = Promise.resolve().then(() => root.fetch(base() + '/api/health', Object.assign({ cache: 'no-store' }, ac ? { signal: ac.signal } : {})))
+      .then(response => {
+        if (!response || !response.ok || !response.headers) return false;
+        const serverMs = Date.parse(response.headers.get('date') || '');
+        if (!Number.isFinite(serverMs)) return false;
+        clockAnchor = { serverMs, pageMs: monotonicNow() }; return true;
+      }).catch(() => false).finally(() => { if (timer) clearTimeout(timer); clockFlight = null; });
+    return clockFlight;
+  }
+  function mint(kind, scope) { const k = key(); if (!k) return ''; try { return mintWith(k, kind, scope, ticketNow(), randomHex(16)); } catch (_) { return ''; } }
 
   // ---- URL builders: every one returns a URL that carries NO master token ----
   // Desktop: the page runs on the Tauri origin and only window.fetch is rewritten to the sidecar, so a URL a
@@ -146,7 +167,7 @@
     return base() + u.pathname + u.search;
   }
 
-  const api = { fileUrl, runUrl, sseUrl, saveBeaconUrl, sign, mint,
+  const api = { fileUrl, runUrl, sseUrl, saveBeaconUrl, sign, mint, refreshClock,
     _test: { sha256, hmacSha256, utf8, b64url, mintWith, scopeFile, scopeRun, SCOPE_SSE, SCOPE_SAVE, KINDS } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (root) root.ApiTicket = api;

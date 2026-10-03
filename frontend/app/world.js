@@ -10171,8 +10171,10 @@ const World = (() => {
     if (typeof EventSource === 'undefined') return;
     let backoff = 1000;
     let retryTimer = null;
-    const open = () => {
+    let opening = false;
+    const open = async () => {
       if (bridgePaused) return;   // disconnected to the title screen — do not (re)open
+      if (opening) return;        // a clock probe/re-entry cannot open duplicate telemetry streams
       /* ONE STREAM, ALWAYS. onerror nulls chanES and arms a retry timer, and resumeBridge re-opens on
          !chanES — so a re-entry INSIDE the backoff window (DATA › IMPORT → reentry → enterGame →
          resumeBridge) created stream #1 and the pending timer then overwrote chanES with #2. #1 was never
@@ -10183,12 +10185,18 @@ const World = (() => {
          stream (the orphan's own onerror closes the module-level chanES, not itself). */
       if (retryTimer) { try { clearTimeout(retryTimer); } catch (_) {} retryTimer = null; }
       if (chanES) return;
+      opening = true;
       try {
+        // Refresh on every attempt, including after a server clock correction.
+        // The page may run on Windows while the verifier runs inside WSL.
+        if (typeof ApiTicket !== 'undefined' && typeof ApiTicket.refreshClock === 'function') await ApiTicket.refreshClock();
+        if (bridgePaused || chanES) return;
         // EventSource can't send the custom auth header, so it presents a SINGLE-USE, 2-minute SSE ticket
         // (ApiTicket.sseUrl — never the master token in a URL). Every (re)connect goes through open(), so each
         // attempt mints a fresh ticket; the absolute sidecar base is prefixed on desktop (Tauri origin).
         chanES = new EventSource(ApiTicket.sseUrl('cursor=' + encodeURIComponent(bridgeCursor)));
       } catch (_) { return; }
+      finally { opening = false; }
       const source = chanES;
       bridgeRecovering = true;
       source.onopen = () => { if (chanES !== source) return; backoff = 1000; lastSseEventAt = (typeof performance !== 'undefined') ? performance.now() : fnow; };

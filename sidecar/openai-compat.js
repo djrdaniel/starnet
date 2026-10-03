@@ -363,6 +363,11 @@ function makeOpenAiCompat(deps) {
         run_status: '/v1/runs/{run_id}',
         run_events: '/v1/runs/{run_id}/events',
         run_stop: '/v1/runs/{run_id}/stop',
+        station_operator: '/v1/station/operator',
+        station_brief: '/v1/station/brief',
+        station_setup: '/v1/station/setup',
+        station_consent: '/v1/station/consents/{run_id}/{prompt_id}',
+        station_consent_ack: '/v1/station/consents/{run_id}/{prompt_id}/ack',
         health: '/health'
       },
       streaming: true,
@@ -373,6 +378,43 @@ function makeOpenAiCompat(deps) {
       // deliberate follow-ups NOT in this slice (see docs/OPENAI_COMPAT.md):
       unsupported: ['responses_api', 'model_routes', 'cors', 'approvals']
     });
+  }
+
+  // Owner control projection shares bearer authentication with Flo worker runs,
+  // but never starts a run or vends the browser's per-launch token.
+  async function handleStationOperator(_req, res) {
+    if (typeof d.stationOperator !== 'function') return json(res, 503, openAiError('Station operator state is unavailable.', { code: 'station_unavailable' }));
+    try { json(res, 200, await d.stationOperator()); }
+    catch (_) { json(res, 503, openAiError('Station operator state could not be read.', { code: 'station_unavailable' })); }
+  }
+  async function handleStationConsent(req, res, runId, promptId, ack) {
+    if (typeof d.stationConsent !== 'function') return json(res, 503, openAiError('Native consent is unavailable.', { code: 'station_unavailable' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 4096) || '{}'); }
+    catch (_) { return json(res, 400, openAiError('Invalid JSON in request body')); }
+    const field = ack ? 'displayed' : 'decision';
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1 || !Object.prototype.hasOwnProperty.call(body, field)
+      || (ack ? body.displayed !== true : !['once', 'deny'].includes(body.decision))) {
+      return json(res, 400, openAiError(ack ? 'Confirm displayed:true after rendering this request.' : 'Only decision:once or decision:deny is allowed.', { code: 'invalid_consent' }));
+    }
+    const result = await d.stationConsent({ runId, promptId, action: ack ? 'ack' : 'decide', value: body[field] });
+    const code = result && result.ok ? 200 : result && result.code || 409;
+    const out = Object.assign({}, result || { ok: false, stale: true, error: 'This request is no longer pending.' });
+    delete out.code;
+    json(res, code, out);
+  }
+
+  async function handleStationSetup(req, res, action) {
+    if (typeof d.stationSetup !== 'function') return json(res, 503, openAiError('Native station setup is unavailable.', { code: 'station_unavailable' }));
+    let body;
+    if (action !== 'proposal') {
+      try { body = JSON.parse(await readBody(req, 4096) || '{}'); }
+      catch (_) { return json(res, 400, openAiError('Invalid JSON in request body')); }
+    }
+    const result = await d.stationSetup(action, body);
+    const code = result && result.ok ? 200 : result && result.code || 503;
+    const out = Object.assign({}, result || { ok: false, error: 'Native setup did not complete.' }); delete out.code;
+    json(res, code, out);
   }
 
   // ---- POST /v1/chat/completions ----------------------------------------------------------------------------
@@ -674,6 +716,9 @@ function makeOpenAiCompat(deps) {
 
     if (p === '/v1/models' && method === 'GET') { handleModels(req, res); return true; }
     if (p === '/v1/capabilities' && method === 'GET') { handleCapabilities(req, res); return true; }
+    if (p === '/v1/station/operator' && method === 'GET') { runGuard(handleStationOperator(req, res), res); return true; }
+    if (p === '/v1/station/brief' && method === 'POST') { runGuard(handleStationSetup(req, res, 'brief'), res); return true; }
+    if (p === '/v1/station/setup' && ['GET', 'POST'].includes(method)) { runGuard(handleStationSetup(req, res, method === 'GET' ? 'proposal' : 'setup'), res); return true; }
     if (p === '/v1/chat/completions' && method === 'POST') { return runGuard(handleReservedChat(req, res), res), true; }
     if (p === '/v1/runs' && method === 'POST') { return runGuard(handleRunsCreate(req, res), res), true; }
     let m;
@@ -684,6 +729,9 @@ function makeOpenAiCompat(deps) {
        never answered. A path segment we cannot decode is simply not a run id we have: 404 it. */
     const runIdOf = (raw) => { try { return decodeURIComponent(raw); } catch (_) { return null; } };
     const notFound = () => { json(res, 404, openAiError('Run not found', { code: 'not_found' })); return true; };
+    if ((m = p.match(/^\/v1\/station\/consents\/([A-Za-z0-9_-]{1,120})\/([A-Za-z0-9_-]{1,120})(\/ack)?$/)) && method === 'POST') {
+      runGuard(handleStationConsent(req, res, m[1], m[2], !!m[3]), res); return true;
+    }
     if ((m = p.match(/^\/v1\/runs\/([^/]+)\/events$/)) && method === 'GET') { const id = runIdOf(m[1]); return id === null ? notFound() : (handleRunEvents(req, res, id), true); }
     if ((m = p.match(/^\/v1\/runs\/([^/]+)\/stop$/)) && method === 'POST') { const id = runIdOf(m[1]); return id === null ? notFound() : (handleRunStop(req, res, id), true); }
     if ((m = p.match(/^\/v1\/runs\/([^/]+)$/)) && method === 'GET') { const id = runIdOf(m[1]); return id === null ? notFound() : (handleRunStatus(req, res, id), true); }

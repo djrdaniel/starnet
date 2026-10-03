@@ -158,3 +158,5 @@ test/routing.linestats.e2e.test.js
 
 test/flo-frame.http.test.js
 test/flo-profiles.http.test.js
+test/station-operator.http.test.js
+test/station-setup.http.test.js

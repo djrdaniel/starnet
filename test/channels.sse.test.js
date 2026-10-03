@@ -7,6 +7,7 @@
 'use strict';
 const A = require('./_assert.js');
 const { makeSseHub, runTeeView, formatKeepalive } = require('../sidecar/channels/sse.js');
+const pendingTests = [];
 
 // Minimal WHATWG SSE message extraction for the keepalive contract: comments are ignored and
 // only one or more `data:` fields produce a browser-visible MessageEvent. This is the exact seam
@@ -199,7 +200,7 @@ A.eq(runTeeView('agent.reasoning', { agentId: 'a1', runId: 'r1', on: true }), nu
   const path = require('path');
   const world = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'app', 'world.js'), 'utf8');
 
-  const openAt = world.indexOf('const open = () => {');
+  const openAt = world.indexOf('const open = async () => {');
   A.ok(openAt > 0, 'world.js owns the channel-bridge open()');
   const openSeg = world.slice(openAt, world.indexOf('connOpenFn = open;', openAt));
   A.ok(/if \(chanES\) return;/.test(openSeg), 'open() refuses to create a SECOND EventSource while one is live');
@@ -223,14 +224,14 @@ A.eq(runTeeView('agent.reasoning', { agentId: 'a1', runId: 'r1', on: true }), nu
     close() { this.closed = true; }
   }
   FakeEventSource.OPEN = 1;
-  const makeBridge = new Function('EventSource', 'setTimeout', 'clearTimeout', `
-    let bridgePaused = false, chanES = null, retryTimer = null, backoff = 1000;
+  const makeBridge = new Function('EventSource', 'setTimeout', 'clearTimeout', 'refreshClock', `
+    let bridgePaused = false, chanES = null, retryTimer = null, backoff = 1000, opening = false;
     let bridgeCursor = '', bridgeRecovering = false;
     const emitted = []; let snapshots = 0;
     let lastSseEventAt = 0, fnow = 0;
     const apiUrl = x => x, fetchSnapshot = () => { snapshots++; };
     const window = { __STARNET_API_TOKEN__: '' };
-    const ApiTicket = { sseUrl: q => '/api/channels/events?' + q + '&ticket=T' + (++minted) };   // app/apiticket.js stand-in
+    const ApiTicket = { refreshClock, sseUrl: q => '/api/channels/events?' + q + '&ticket=T' + (++minted) };   // app/apiticket.js stand-in
     let minted = 0;
     const performance = { now: () => 0 };
     const U = { bus: { emit(name, payload) { emitted.push({name, payload}); } } };
@@ -238,7 +239,8 @@ A.eq(runTeeView('agent.reasoning', { agentId: 'a1', runId: 'r1', on: true }), nu
     return {
       open,
       emitted, snapshots: () => snapshots,
-      resume() { if (!chanES) open(); },
+      resume() { bridgePaused = false; if (!chanES) return open(); },
+      pause() { bridgePaused = true; if (chanES) chanES.close(); chanES = null; },
       source() { return chanES; }
     };
   `);
@@ -273,6 +275,24 @@ A.eq(runTeeView('agent.reasoning', { agentId: 'a1', runId: 'r1', on: true }), nu
   const spawnAt = world.indexOf('chanQueues.clear(); serverLit.clear();');
   A.ok(spawnAt > 0, 'spawn() owns the new-agent reset block');
   A.ok(!/subLedger/.test(world), 'the retired helper-sprite ledger stays gone — no floating sub-agent marker in the world');
+  pendingTests.push((async () => {
+    let release, probes = 0;
+    const clock = new Promise(resolve => { release = resolve; });
+    const before = sources.length;
+    const probing = makeBridge(FakeEventSource, fakeSetTimeout, fakeClearTimeout, () => { probes++; return clock; });
+    const firstOpen = probing.open(); probing.open(); probing.resume();
+    A.eq(probes, 1, 're-entry during server-clock refresh cannot start a second probe/open');
+    A.eq(sources.length, before, 'no EventSource is created with a stale browser clock while refresh is pending');
+    release(true); await firstOpen;
+    A.eq(sources.length, before + 1, 'a completed clock refresh opens exactly one telemetry stream');
+    probing.source().onerror(); await probing.resume();
+    A.eq(probes, 2, 'each reconnect refreshes the verifier clock before minting another ticket');
+    const pausedBefore = sources.length;
+    let releasePaused;
+    const paused = makeBridge(FakeEventSource, fakeSetTimeout, fakeClearTimeout, () => new Promise(resolve => { releasePaused = resolve; }));
+    const pendingOpen = paused.open(); paused.pause(); releasePaused(true); await pendingOpen;
+    A.eq(sources.length, pausedBefore, 'a disconnect while clock refresh is pending cannot open an orphan stream');
+  })());
 }
 
-A.report('channels.sse');
+Promise.all(pendingTests).then(() => A.report('channels.sse')).catch(error => { console.error(error); process.exitCode = 1; });

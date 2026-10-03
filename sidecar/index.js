@@ -268,6 +268,7 @@ function writeFileDurable(deps, file, data) {
   if (updateWritesFrozen) throw Object.assign(new Error('durable writes are frozen for update'), { code: 'UPDATE_MUTATIONS_FROZEN' });
   return writeFileDurableRaw(deps, file, data);
 }
+const { makeFloOperation } = require('./flo-operation.js');
 const { makeKeyedMutex, readJsonResilient, writeJsonResilient, makeDurableJsonStore, saveJsonVerified } = require('./durable-store.js'); // P1/P2: per-key serialized + last-known-good-recoverable single-file JSON stores
 const { makeDomainStore } = require('./domain-store.js'); // normalized/versioned policy for ordinary non-secret singleton state
 const { makeWidgetTools } = require('./tools/builtin/widgets.js'); // WIDGET RAILS Phase 2: widget.set — agent-fed readouts for the chrome rails (polled via GET /api/widgets)
@@ -566,6 +567,7 @@ if (!workspaceOwnerClaim.ok) {
 // Synchronous and idempotent: covers ordinary returns and every process.exit path. SIGKILL/TerminateProcess
 // cannot run handlers, so their valid PID-stamped claim is recovered by the next boot instead.
 process.once('exit', () => { try { workspaceOwner.release(); } catch (_) {} });
+const floOperation = makeFloOperation({ fs, path, workspaces: WORKSPACES, writeDurable: writeFileDurable });
 
 // Capture lineage before this process stamps schema/cache/runtime files. It is bounded metadata only: names and
 // counts, never file contents. In packaged mode we also inspect known legacy roots and verified update snapshots;
@@ -6683,6 +6685,7 @@ function commanderEvidenceContext(existingSystem, extra) {
 // an unproven budget/provider/readiness gate stands down as `precheck-error` and is retried on a later tick.
 function nightshiftPrecheck() {
   try {
+    if (!floOperation.snapshot().native_unscoped_autonomous_allowed) return { ok: false, reason: 'flo-managed' };
     // LANE L — COST GATE (pre-spend). The leash is spent at ACCEPT time; a beat's FIRST model call then dies with
     // reason 'budget' (loop.js) if a cross-run pool is exhausted — so with the day/global/agent pool dry every
     // attempt burned a leash unit on a run that made ZERO model calls. Read the governor side-effect-free (runId=null
@@ -6735,6 +6738,7 @@ function nightshiftReadinessView() {
    honestly (delivered:false, no draft) when nothing grounds out or nothing clears the confidence gate —
    idle-doing-nothing beats slop (the anti-slop heart, preserved from the frontend). */
 async function runNightshiftBeat(opts) {
+  if (!floOperation.snapshot().native_unscoped_autonomous_allowed) return { delivered: false, reason: 'flo-managed' };
   opts = opts || {};
   const agentId = String(opts.agentId || NIGHTSHIFT_AGENT);
   const signal = opts.signal;
@@ -7032,7 +7036,7 @@ const nightshiftDriver = makeNightshiftDriver({
 });
 let nightshiftTimer = null;
 // the LIVE armed state: SKYNET_NIGHTSHIFT_ENABLED (env, boot-frozen) OR the posture already permits acting at boot.
-function nightshiftShouldArm() { try { return NIGHTSHIFT_ENABLED || !!(commanderPosture.summary() || {}).actsUnattended; } catch (_) { return NIGHTSHIFT_ENABLED; } }
+function nightshiftShouldArm() { try { return floOperation.snapshot().native_unscoped_autonomous_allowed && (NIGHTSHIFT_ENABLED || !!(commanderPosture.summary() || {}).actsUnattended); } catch (_) { return false; } }
 function armNightshift() {
   if (processFaultQuiesced || nightshiftTimer) return false;
   nightshiftTimer = setInterval(() => { try { nightshiftDriver.applyTick(Date.now()); } catch (e) { console.warn('[nightshift] tick error:', (e && e.message) || e); } }, NIGHTSHIFT_TICK_MS);
@@ -9301,7 +9305,107 @@ function stopGenericChannel(id) {
    Every run rides the SAME runOnce autonomous seam the channel hub uses (surface:'autonomous', broadcast:true),
    so an external harness's run is visible on the station floor and its transcript lands in the channel store. */
 let updatePreparation = null;
+const { makeStationOperator, makeNativeConsentBridge, consentArgumentDetails } = require('./station-operator.js');
+const { makeStationSetup } = require('./station-setup.js');
+const stationSetup = makeStationSetup({ fs, path, workspaces: WORKSPACES, writeDurable: writeFileDurable,
+  now: () => Date.now(), saveStore, operation: floOperation,
+  busy: () => runs.size > 0 || hostLiveRuns.size > 0 || pendingByRun.size > 0
+    || [...openaiCompat._internals.runs.values()].some(r => !r.closed),
+  syncBrief: (next, brief, previous) => {
+    const Dossier = require('../frontend/app/dossier.js');
+    const Understanding = require('../frontend/app/understanding.js');
+    const block = Dossier.composeBlock(next.dossier, { maxChars: 4096 });
+    saveResilient(DOSSIER_FILE, { block }); commanderDossier.load();
+    const current = commanderGoals.get();
+    const goal = Object.assign({ id: 'flo-commerce', done: 0, total: 0, pct: 0, next: null, milestoneId: null }, current || {}, { text: brief.direction.trim() });
+    saveResilient(GOALS_FILE, { goal }); commanderGoals.load();
+    const rd = Understanding.readiness(next.dossier);
+    commanderPosture.set(null, { known: Dossier.summary(next.dossier).known,
+      beliefs: next.dossier.dims, ready: { ok: rd.ready, reasons: rd.reasons } });
+    const replacements = new Map((next.agents || []).map(a => [a.id, a]));
+    const previousDocuments = new Map((previous.agents || []).map(a => [a.id, a]));
+    for (const [id, worker] of agentRoster) {
+      const own = replacements.get(id); if (!own || !own.docs || !own.docs.manual) continue;
+      // The host persona gets the same fixed contract; saved provider/approval/profile fields are untouched.
+      const oldManual = previousDocuments.get(id)?.docs?.manual;
+      if (oldManual && String(worker.system || '').includes(oldManual)) agentRoster.set(id, Object.assign({}, worker, { system: worker.system.replace(oldManual, own.docs.manual) }));
+    }
+    if (!saveAgentRoster()) throw new Error('The native roster update was not proven');
+  },
+  syncFloor: (_next, plan) => {
+    const result = router.setPlan(plan);
+    if (!result || !result.ok) throw new Error('The native router rejected the validated floor');
+    saveResilient(ROUTING_FILE, plan);
+  }
+});
+const nativeConsentBridge = makeNativeConsentBridge({ pending: pendingByRun, now: () => Date.now(), redact });
+const stationOperator = makeStationOperator({
+  now: () => Date.now(), redact,
+  operation: () => floOperation.snapshot(),
+  saved: () => saveStore.load('agent'), routing: () => router.getPlan(),
+  goal: () => commanderGoals.get(), journey: () => journeyStore.snapshot(commanderGoals.get()),
+  autonomy: () => commanderPosture.summary(), grounding: () => commanderPosture.beliefs(),
+  crew: () => {
+    const saved = saveStore.load('agent') || {};
+    const documents = new Map((saved.agents || []).map(a => [a.id, a]));
+    return [...agentRoster].map(([agentId, a]) => {
+      const own = documents.get(agentId) || {};
+      return { agentId, name: a.name, role: own.role || '', provider: a.provider, model: a.model,
+        reasoningEffort: a.reasoningEffort, approvalMode: a.approvalMode, executionProfile: a.executionProfile,
+        manual: (own.docs && own.docs.manual) || '' };
+    });
+  },
+  consents: () => nativeConsentBridge.snapshot()
+});
 const openaiCompat = makeOpenAiCompat({
+  stationOperator: async () => {
+    const snapshot = stationOperator.snapshot();
+    const items = []; let count = 0, clipped = false;
+    try {
+      const recordedRuns = runStore.all();
+      const rosterIds = [...agentRoster]; clipped = rosterIds.length > 60;
+      for (const [agentId] of rosterIds.slice(0, 60)) {
+        const state = workshopStore._durable.readKey('workshop:' + agentId);
+        if (state.quarantined || !['ok', 'recovered', 'absent'].includes(state.status)) throw new Error('Native workshop state unavailable');
+        const rec = workshopStore.read(agentId);
+        const pendingBuilds = (rec.backlog || []).filter(it => it.builtRunId); clipped = clipped || pendingBuilds.length > 20;
+        for (const item of pendingBuilds.slice(0, 20)) {
+          const manifest = await validateWorkshopManifest(agentId, item.builtRunId);
+          if (!manifest) continue;
+          count++;
+          if (items.length < 80) items.push(redact({ id: 'workshop:' + agentId + ':' + manifest.runId,
+            source: 'workshop', agent_id: agentId, run_id: manifest.runId, title: manifest.title,
+            summary: manifest.summary.slice(0, 600), file_count: manifest.files.length,
+            status: 'awaiting_owner_review', plan_only: manifest.planOnly === true,
+            session_id: (recordedRuns.find(r => r.runId === manifest.runId) || {}).streamId || null,
+            built_at: workshopBuiltAtOf(item),
+            source_revision: crypto.createHash('sha256').update(JSON.stringify({ item, manifest })).digest('hex'),
+            allowed_actions: ['open_native_station'], requires_owner: true }));
+        }
+      }
+      snapshot.owner_reviews = { status: 'confirmed', data: { count, items, truncated: clipped || count > items.length } };
+    } catch (_) { snapshot.owner_reviews = { status: 'unavailable', reason: 'Native owner reviews could not be read.' }; }
+    return snapshot;
+  },
+  stationSetup: (action, body) => {
+    const ticket = updatePreparation
+      ? updatePreparation.beginRequest(action === 'proposal' ? 'GET' : 'POST', '/v1/station/' + action)
+      : { ok: true, release() {} };
+    if (!ticket.ok) return { ok: false, code: 423, frozen: true, error: 'StarNet is frozen at a verified pre-update recovery point.' };
+    try { return action === 'brief' ? stationSetup.brief(body) : action === 'proposal' ? stationSetup.proposal() : stationSetup.setup(body); }
+    finally { ticket.release(); }
+  },
+  stationConsent: request => {
+    const ticket = updatePreparation
+      ? updatePreparation.beginRequest('POST', '/v1/station/consents')
+      : { ok: true, release() {} };
+    if (!ticket.ok) return { ok: false, code: 423, frozen: true, error: 'StarNet is frozen at a verified pre-update recovery point.' };
+    try {
+      return request.action === 'ack'
+        ? nativeConsentBridge.ack(request.runId, request.promptId, request.value)
+        : nativeConsentBridge.decide(request.runId, request.promptId, request.value);
+    } finally { ticket.release(); }
+  },
   requestReservations: require('./request-reservations').makeRequestReservations({ fs, path, workspaces: WORKSPACES, now: () => Date.now(), writeDurable: writeFileDurable }),
   // External /v1 runs do not use the browser route's run registry, so explicitly count their whole async
   // lifetime as a mutation. This closes the last in-flight path the pre-update quiescence receipt must cover.
@@ -13566,6 +13670,7 @@ async function validateWorkshopManifest(agentId, runId) {
 // manifest, and (only if valid) emit workshop.built. Reuses the SAME runOnce host + autonomous posture as cron.
 // Returns { fired, runId?, reason }. An empty/denied backlog is a SILENT no-op (fired:false, no event, no toast).
 async function runWorkshopShift(agentId, opts) {
+  if (!floOperation.snapshot().native_unscoped_autonomous_allowed) return { fired: false, reason: 'flo-managed' };
   const o = opts || {};
   const id = String(agentId || '');
   if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) return { fired: false, reason: 'bad-agent' };
@@ -15925,12 +16030,16 @@ async function handleRun(req, res) {
   function askHuman(fields) {
     return makeConsentWait({
       pending, signal: ac.signal, timeoutMs: CONSENT_TIMEOUT_MS, extendMs: CONSENT_ACK_EXTEND_MS,
+      now: () => Date.now(),
+      description: { agentId, tool: (fields && fields.tool) || 'tool', scope: (fields && fields.scope) || 'write',
+        argsSummary: redact((fields && fields.argsSummary) || ''),
+        args: (fields && fields.args) || null, argsComplete: !!(fields && fields.argsComplete), argsPreview: (fields && fields.argsPreview) || '' },
       uuid: () => crypto.randomUUID(),
       emitPrompt: (promptId) => emit('permission.prompt', { promptId, agentId, tool: (fields && fields.tool) || 'tool', scope: (fields && fields.scope) || 'write', argsSummary: (fields && fields.argsSummary) || '' })
     }).ask();
   }
   function promptConsent(call, tool) {
-    return askHuman({ tool: call.name, scope: (tool && tool.scope) || 'write', argsSummary: consentSummary(call) });
+    return askHuman(Object.assign({ tool: call.name, scope: (tool && tool.scope) || 'write', argsSummary: consentSummary(call) }, consentArgumentDetails(call.args, redact)));
   }
   // NS-5: the "work in <root>? always/once/no" channel — the SAME permission.prompt mechanism, so the browser's
   // existing consent card answers it (Always = record a standing path grant; Approve once = this access only;
@@ -16211,6 +16320,7 @@ async function runOnceTracked(o) {
 }
 async function runOnceCore(o) {
   const floProfile = floCapabilities.resolve(o.capabilityProfile);
+  floOperation.assertAdmission(o, floProfile);
   const floCapabilityGuard = floProfile ? (o.floCapabilityGuard || floCapabilities.makeGuard(floProfile)) : null;
   if (floProfile) o = Object.assign({}, o, { maxIters: floProfile.max_iterations, fallbackModels: [], fallbackProviders: [], reflect: false });
   if (updatePreparation.isFrozen()) {
@@ -19570,6 +19680,7 @@ async function handleHarnessScan(req, res) {
 // the server's authoritative boundary here is the cabinet:write GRANT + the fs-jail + the hardline floor.
 async function handleAutonomyWrite(req, res) {
   const sendJson = (code, obj) => respondJson(res, code, obj);   // canonical helper (sidecar/respond.js)
+  if (!floOperation.snapshot().native_unscoped_autonomous_allowed) return sendJson(409, { ok: false, reason: 'flo-managed', error: 'Flo must explicitly admit a named worker job.' });
   let body; try { body = JSON.parse(await readBody(req, 1 << 20, res)) || {}; } catch (e) { if (res.headersSent) return; res.writeHead(400); return res.end('bad json'); }
   const agentId = String(body.agentId || 'agent');
   // agentId keys the workspace jail + checkpoint store + persisted roster posture; validate it to the same
@@ -19648,7 +19759,7 @@ async function handleAutonomyPosture(req, res) {
   let workshopGranted = null;
   try {
     const sum = commanderPosture.summary() || {};
-    if (sum.buildsUnattended) {
+    if (sum.buildsUnattended && floOperation.snapshot().native_unscoped_autonomous_allowed) {
       const g = await workshopStore.grantIfUndecided(NIGHTSHIFT_AGENT);
       workshopGranted = !!(g && g.granted);
       if (g && g.changed) recordAutonomy({ source: 'nightshift', kind: 'note', agentId: NIGHTSHIFT_AGENT, reason: 'workshop-grant:auto', detail: { phase: 'grant', note: 'the dial reached build-capable — recorded the away-workshop grant (never explicitly decided before)' } });
