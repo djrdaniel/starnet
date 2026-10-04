@@ -138,6 +138,13 @@ Local staging and local review approve no external upload, shop change,
 publication, rights attestation or fee. Those effects retain their separate
 immutable connector proposal and exact owner approval.
 
+Local proposal fields are checked against the selected physical/digital route;
+unsupported fields are identified before any POST, without silently removing
+them. Bounded safe JSON validation messages from local 4xx replies are fenced
+as data so the lead can correct its own inputs. Credentials, private paths,
+redirects, raw/oversized responses and uncertain failures remain unverified.
+Read saved outcomes before another proposal; no automatic replay is added.
+
 The owner-only managed-settings correction uses the same canonical backup,
 receipt and revision CAS. It resolves the active operation objective on the host,
 aligns saved crew/global reasoning to high, and repairs the Commander goal text

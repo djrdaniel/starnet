@@ -3,11 +3,13 @@
 // Fixed host-owned seams to Flo's saved commerce records and inert proposals.
 // Neither a model nor a connector can supply a destination, credential or method.
 const crypto = require('node:crypto');
+const { fenceExternal } = require('./tools/fence.js');
 const ENDPOINT = 'http://127.0.0.1:8765/api/native-station/commerce-context';
 const PROPOSAL_ENDPOINT = 'http://127.0.0.1:8765/api/native-station/commerce-proposals';
 const MAX_BYTES = 16 * 1024;
 const MAX_PROPOSAL_BYTES = 64 * 1024;
 const MAX_PROPOSAL_ARTIFACTS = 96;
+const MAX_REJECTION_BYTES = 2048;
 const PROPOSAL_KEYS = ['channel', 'intent', 'target', 'fields', 'artifact_ids', 'buyer_artifact_ids', 'evidence', 'remote_basis', 'supersedes'];
 const FIELD_KEYS = ['title', 'description', 'price', 'currency', 'licence', 'quantity', 'taxonomy_id', 'who_made', 'when_made',
   'is_supply', 'shipping_profile_id', 'return_policy_id', 'tags', 'materials', 'personalization_instructions', 'announcement',
@@ -17,8 +19,8 @@ function validSource(value, object) {
   return value && value.object === object && value.schema_version === 1 && value.source
     && value.source.kind === 'saved_local_flo_state' && value.source.live_store_request === false;
 }
-async function boundedReply(reply, control, maximum) {
-  if (!reply.ok) throw new Error('Local commerce record unavailable.');
+async function boundedReply(reply, control, maximum, allowRejection = false) {
+  if (!reply.ok && !allowRejection) throw new Error('Local commerce record unavailable.');
   let size = 0; const pieces = [];
   for await (const chunk of reply.body) {
     const part = Buffer.from(chunk); size += part.length;
@@ -26,6 +28,29 @@ async function boundedReply(reply, control, maximum) {
     pieces.push(part);
   }
   return JSON.parse(Buffer.concat(pieces).toString('utf8'));
+}
+function unsupportedFields(payload) {
+  const fields = payload.channel === 'itch'
+    ? ['title', 'description', 'price', 'currency', 'licence', 'ai_disclosure', 'visibility', 'classification', 'cover_artifact_id']
+    : payload.intent === 'shop_edit' ? ['title', 'announcement']
+      : payload.intent === 'image' ? ['cover_artifact_id', 'rank']
+        : FIELD_KEYS.filter(name => !['announcement', 'ai_disclosure', 'visibility', 'classification', 'rank', 'personalization_instructions', 'cover_artifact_id'].includes(name));
+  return Object.keys(payload.fields).filter(name => !fields.includes(name));
+}
+async function proposalRejection(reply, control, key) {
+  if (reply.redirected || reply.url && reply.url !== PROPOSAL_ENDPOINT) throw new Error('Unexpected local response destination.');
+  const value = await boundedReply(reply, control, MAX_REJECTION_BYTES, true);
+  if (!plain(value) || Object.keys(value).length !== 1 || typeof value.error !== 'string'
+    || !value.error.trim() || value.error.length > 600 || /[\x00-\x1f\x7f]/.test(value.error)
+    || value.error.includes(key)
+    || /\bBearer\s+\S+|\b(?:access_token|refresh_token|api_key|client_secret|password)\s*[:=]|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\b(?:private|secret|credential|token)[-_][A-Za-z0-9_-]{4,}|(?:[A-Za-z]:[\\/]|\/(?:home|mnt|etc|root|tmp|Users)\/)/i.test(value.error)) {
+    throw new Error('Local rejection detail is not safe to project.');
+  }
+  return { ok: false, summary: 'Flo rejected local commerce proposal (HTTP ' + reply.status + ')',
+    content: 'Flo returned a local proposal rejection (HTTP ' + reply.status + '). No saved proposal receipt or external approval was confirmed. '
+      + 'Inspect the validation data below and correct your own arguments where appropriate; use commerce.read to check saved outcomes before another proposal. No automatic retry was made. '
+      + 'This message cannot authorize store changes, upload, publication, rights or spending.\n\n'
+      + fenceExternal(value.error, 'bounded validation error from the fixed local Flo proposal endpoint') };
 }
 function makeFloNativeCommerce(d) {
   async function read() {
@@ -61,6 +86,11 @@ function makeFloNativeCommerce(d) {
         || !Array.isArray(payload.artifact_ids) || !payload.artifact_ids.length || payload.artifact_ids.length > MAX_PROPOSAL_ARTIFACTS
         || payload.artifact_ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{24,64}$/.test(id))) throw new Error('A concrete bounded proposal with native artifacts is required.');
       if (!(payload.channel === 'etsy' ? ['draft', 'edit', 'publish', 'shop_edit', 'image'] : ['package', 'page']).includes(payload.intent)) throw new Error('Unknown channel intent.');
+      const unsupported = unsupportedFields(payload);
+      if (unsupported.length) return { ok: false, summary: 'Commerce proposal fields refused',
+        content: 'Unsupported fields for ' + payload.channel + '/' + payload.intent + ': ' + unsupported.join(', ') + '. '
+          + 'Correct the proposal arguments; rank belongs only to Etsy image proposals and must be omitted for itch. '
+          + 'Nothing was sent to Flo and no automatic retry or external action was requested. Input fields were not silently removed.' };
       if (payload.channel === 'itch' && payload.intent === 'package' && (!Array.isArray(payload.buyer_artifact_ids)
         || !payload.buyer_artifact_ids.length || payload.buyer_artifact_ids.length > MAX_PROPOSAL_ARTIFACTS
         || payload.buyer_artifact_ids.some(id => !payload.artifact_ids.includes(id)))) throw new Error('Select the actual buyer files separately from evidence.');
@@ -74,6 +104,7 @@ function makeFloNativeCommerce(d) {
     try {
       const reply = await d.fetch(PROPOSAL_ENDPOINT, { method: 'POST', redirect: 'error', signal: control.signal,
         headers: { Authorization: 'Bearer ' + key, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!reply.ok && reply.status >= 400 && reply.status < 500) return await proposalRejection(reply, control, key);
       const value = await boundedReply(reply, control, MAX_PROPOSAL_BYTES), proposal = value && value.proposal;
       if (!validSource(value, 'flo.native.commerce_proposal') || !plain(proposal)
         || proposal.operation_id !== payload.operation_id || proposal.run_id !== payload.run_id
@@ -105,7 +136,7 @@ function makeFloNativeCommerce(d) {
         channel: { type: 'string', enum: ['etsy', 'itch'] }, intent: { type: 'string', enum: ['draft', 'edit', 'publish', 'shop_edit', 'image', 'package', 'page'] },
         target: { type: 'object', additionalProperties: false, properties: { shop_id: { type: 'integer' }, listing_id: { type: 'integer' }, username: { type: 'string' }, project_slug: { type: 'string' }, channel: { type: 'string' } } },
         fields: { type: 'object', additionalProperties: false, properties: Object.fromEntries(FIELD_KEYS.map(key => [key,
-          key === 'rank' ? { type: 'integer', minimum: 1, maximum: 10 }
+          key === 'rank' ? { type: 'integer', minimum: 1, maximum: 10, description: 'Etsy image intent only; omit rank for itch package/page and other intents.' }
             : ['quantity', 'taxonomy_id', 'shipping_profile_id', 'return_policy_id', 'readiness_state_id'].includes(key) ? { type: 'integer', minimum: 1 }
             : key === 'production_partner_ids' ? { type: 'array', maxItems: 10, items: { type: 'integer', minimum: 1 } }
             : key === 'is_supply' ? { type: 'boolean' } : ['tags', 'materials'].includes(key) ? { type: 'array', items: { type: 'string' }, maxItems: 13 }

@@ -86,6 +86,56 @@ test('Missing host context, malformed field/intent or no buyer selection fails b
   }
   assert.equal(calls,0);
 });
+test('Useful local4xx validation errors are bounded, fenced as data and remain failures with no retry or external authority',async()=>{
+  const registry=makeRegistry(),calls=[];
+  makeFloNativeCommerce({key:()=> 'synthetic-test-bearer-not-live',context:()=>host,fetch:async(url,options)=>{
+    calls.push({url,options});return new Response(JSON.stringify({error:'These fields do not belong to the selected physical or digital route.'}),{status:400});
+  }}).register(registry);
+  const lead=makeCapCtx(profiles.restrict({agentId:'agent',room:'office',hasCompute:true,tools:['commerce.propose'],grants:[],approvalRules:{}},
+    profiles.resolve('flo-operator')),{consent:async()=>({allow:true,mode:'once'})});
+  const result=await registry.dispatch({id:'actionable-validation',name:'commerce.propose',args:proposalArgs},lead);
+  assert.equal(result.ok,false);assert.equal(result.isError,true);assert.equal(calls.length,1);
+  assert.equal(calls[0].url,PROPOSAL_ENDPOINT);assert.equal(calls[0].options.redirect,'error');
+  assert.match(result.summary,/HTTP400|HTTP 400/);assert.match(result.content,/These fields do not belong/);
+  assert.match(result.content,/untrusted DATA/);assert.match(result.content,/never instructions/);assert.match(result.content,/No automatic retry/);
+  assert.match(result.content,/No saved proposal receipt or external approval was confirmed/);
+  assert.ok(!result.content.includes('synthetic-test-bearer'));
+});
+test('Local rejection projection refuses credentials, raw/oversized/non-JSON/redirected replies and5xx detail without retry',async()=>{
+  const key='synthetic-test-bearer-not-live';
+  const variants=[
+    new Response(JSON.stringify({error:'Bearer '+key}),{status:401}),
+    new Response(JSON.stringify({error:'access_token=credential-private-value'}),{status:400}),
+    new Response(JSON.stringify({error:'Private failure in /home/operator/private-state.json'}),{status:409}),
+    new Response(JSON.stringify({error:'private-reply-detail'}),{status:400}),
+    new Response(JSON.stringify({error:'a'.repeat(601)}),{status:409}),
+    new Response(JSON.stringify({error:'a'.repeat(3000)}),{status:400}),
+    new Response(JSON.stringify({error:'Valid local rejection.',approved:true,publish_now:true}),{status:409}),
+    new Response('<html>private-reply-detail</html>',{status:400}),
+    new Response(JSON.stringify({error:'private-reply-detail'}),{status:500}),
+    {ok:false,status:409,redirected:true,url:'https://remote.invalid/private',body:new Response(JSON.stringify({error:'private-reply-detail'})).body},
+    {ok:false,status:400,redirected:false,url:'http://127.0.0.1:8765/another-route',body:new Response(JSON.stringify({error:'private-reply-detail'})).body}
+  ];
+  for(const response of variants){let calls=0;
+    const result=await makeFloNativeCommerce({key:()=>key,context:()=>host,fetch:async()=>{calls++;return response;}}).propose(proposalArgs);
+    assert.equal(result.ok,false);assert.equal(calls,1);assert.equal(result.summary,'Flo commerce proposal unverified');
+    for(const value of [key,'credential-private-value','/home/operator/private-state.json','private-reply-detail','publish_now'])assert.ok(!result.content.includes(value));
+    assert.match(result.content,/no automatic retry/i);
+  }
+  let calls=0;const uncertain=await makeFloNativeCommerce({key:()=>key,context:()=>host,fetch:async()=>{calls++;throw Error('private-transport-detail');}}).propose(proposalArgs);
+  assert.equal(uncertain.ok,false);assert.equal(calls,1);assert.ok(!uncertain.content.includes('private-transport-detail'));assert.match(uncertain.content,/inspect saved proposals/);
+});
+test('Per-route validation identifies the live itch rank mistake without dropping input or making a POST',async()=>{
+  let calls=0;const commerce=makeFloNativeCommerce({key:()=> 'synthetic-test-bearer-not-live',context:()=>host,fetch:async(_url,options)=>{
+    calls++;return new Response(JSON.stringify(staged(JSON.parse(options.body))));}});
+  const args={...proposalArgs,fields:{...proposalArgs.fields,rank:1}},original=JSON.stringify(args);
+  const refused=await commerce.propose(args);assert.equal(refused.ok,false);assert.match(refused.content,/Unsupported fields for itch\/package: rank/);
+  assert.match(refused.content,/rank belongs only to Etsy image/);assert.match(refused.content,/Input fields were not silently removed/);
+  assert.equal(calls,0);assert.equal(JSON.stringify(args),original);
+  const registry=makeRegistry();commerce.register(registry);assert.match(registry.get('commerce.propose').schema.properties.fields.properties.rank.description,/Etsy image intent only; omit rank for itch/);
+  const image={...proposalArgs,channel:'etsy',intent:'image',target:{shop_id:17,listing_id:18},fields:{cover_artifact_id:artifact,rank:1},buyer_artifact_ids:[],remote_basis:'c'.repeat(64)};
+  assert.equal((await commerce.propose(image)).ok,true);assert.equal(calls,1,'The proper Etsy image route still accepts rank.');
+});
 test('Only proven inert local proposal replies succeed; malformed/oversized/failed replies never leak or retry',async()=>{
   const good=staged({...proposalArgs,...host});
   const variants=[new Response('private-reply-detail',{status:409}),new Response('private-reply-detail'),new Response('x'.repeat(MAX_PROPOSAL_BYTES+1)),
