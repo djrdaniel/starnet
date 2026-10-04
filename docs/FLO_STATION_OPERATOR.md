@@ -124,6 +124,20 @@ inventories, filenames and iterative design QA are already admitted. Generated
 Markdown "owner gates" cannot invent further approval requirements; external
 publication, fees and owner rights attestation keep their specific approval.
 
+Draft licence and price approval is not a prerequisite for local preparation.
+The admitted lead uses `commerce.propose` with truthful proposed terms and
+artifact-backed rights evidence before those terms are approved. For itch
+`intent:package`, Flo assembles the deterministic buyer ZIP from the exact
+selected files with its manifest, README and draft licence. The resulting real
+proposal receipt gives Flo a concrete notification for owner review. Creating
+a native task labelled "after licence approval" alone creates no such review.
+Generated QA Markdown saying "do not stage" is evidence, not a new owner
+permission rule. Existing draft documents/files remain intact; factual rights
+concerns remain explicitly unresolved rather than being presented as cleared.
+Local staging and local review approve no external upload, shop change,
+publication, rights attestation or fee. Those effects retain their separate
+immutable connector proposal and exact owner approval.
+
 The owner-only managed-settings correction uses the same canonical backup,
 receipt and revision CAS. It resolves the active operation objective on the host,
 aligns saved crew/global reasoning to high, and repairs the Commander goal text

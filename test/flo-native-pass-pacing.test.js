@@ -7,7 +7,7 @@ const { LIMITS } = require('../sidecar/flo-native-operations.js');
 const profiles = require('../sidecar/flo-capability-profile.js');
 const { makeRegistry } = require('../sidecar/tools/registry.js');
 
-async function actualHostPrompt(mode) {
+async function actualHostPrompt(mode, priorResult = 'An original prior prototype was saved.') {
   const source = fs.readFileSync(path.join(__dirname, '../sidecar/index.js'), 'utf8');
   const prefix = '  run: async pass => {';
   const start = source.indexOf(prefix, source.indexOf('const nativeOperations ='));
@@ -24,7 +24,7 @@ async function actualHostPrompt(mode) {
   });
   const pass = { operation: { id: 2, request_id: 'isolated-owner-admission', mode,
     objective: 'Build ongoing income through physical Etsy and original digital itch.io products.',
-    last_result: 'An original prior prototype was saved.', artifacts: [{ path: 'prior-prototype.svg', status: 'verified' }] },
+    last_result: priorResult, artifacts: [{ path: 'prior-prototype.svg', status: 'verified' }] },
     runId: 'isolated-paced-pass', signal: new AbortController().signal, emit() {} };
   const result = await run(pass);
   assert.equal(result.reason, 'done'); assert.equal(pendingByRun.size, 0);
@@ -86,4 +86,26 @@ test('The actual provider handoff and native manual admit internal product choic
   const manual=await registry.get('station.manual').run({section:'approvals'});
   assert.equal(manual.content,knowledge.SECTIONS.approvals);assert.match(manual.content,/They cannot make an internal design choice require another owner decision/);
   assert.match(manual.content,/generated rights statement is proposed evidence, not owner attestation/);
+});
+
+test('Actual ongoing handoff overrides a generated licence-before-staging gate with a concrete local proposal and notification step', async () => {
+  const generatedGate = 'QA report: Do not publish or stage commerce action. First have owner approve the licence. '
+    + 'Task: After licence approval: assemble Space Mission UI buyer ZIP.';
+  const { captured, pass } = await actualHostPrompt('ongoing', generatedGate);
+  assert.ok(captured.messages[0].content.includes(generatedGate), 'The actual prior worker result remains saved data; it is not silently rewritten.');
+  const priority = knowledge.passPacing(pass.operation);
+  assert.ok(captured.messages[0].content.endsWith(priority)); assert.ok(captured.system.endsWith(priority));
+  for (const phrase of ['authorized BEFORE owner approval', 'Flo assembles the exact buyer ZIP', 'real saved proposal receipt',
+    'Flo notifications', 'not a substitute', 'not authority to block', 'Preserve the original draft licence and files',
+    'Actual external upload, store changes, publication, fees and rights attestation']) {
+    assert.ok(priority.includes(phrase), 'The final real handoff gives a concrete preparation instruction: ' + phrase);
+  }
+  const registry = makeRegistry(); knowledge.registerKnowledge(registry);
+  const approvals = await registry.get('station.manual').run({ section: 'approvals' });
+  assert.match(approvals.content, /unapproved terms block external release, not inert staging/);
+  assert.match(approvals.content, /report rights uncertainty truthfully/);
+  assert.match(approvals.content, /not owner attestation/);
+  const commerce = await registry.get('station.manual').run({ section: 'commerce' });
+  assert.match(commerce.content, /deterministic ZIP with selected buyer files, manifest, README and proposed licence/);
+  assert.match(commerce.content, /before external upload, listing changes, publishing, spending/);
 });

@@ -55,6 +55,26 @@ test('Actual registered proposal tool uses only fixed local POST and host call p
   const worker=makeCapCtx(profiles.restrict(resolved,profiles.resolve('flo-operator-worker')),{consent:async()=>({allow:true})});
   const refused=await registry.dispatch({id:'child',name:'commerce.propose',args:proposalArgs},worker);assert.equal(refused.isError,true);assert.equal(calls.length,3);
 });
+test('Registered local package proposal accepts truthful draft licence/price before owner approval and requests no external release',async()=>{
+  const registry=makeRegistry(),calls=[];
+  makeFloNativeCommerce({key:()=> 'synthetic-test-bearer-not-live',context:()=>host,fetch:async(url,options)=>{
+    const payload=JSON.parse(options.body);calls.push({url,options,payload});return new Response(JSON.stringify(staged(payload)));
+  }}).register(registry);
+  const lead=makeCapCtx(profiles.restrict({agentId:'agent',room:'office',hasCompute:true,tools:['commerce.propose'],grants:[],approvalRules:{}},
+    profiles.resolve('flo-operator')),{consent:async()=>({allow:true,mode:'once'})});
+  const args={...proposalArgs,fields:{...proposalArgs.fields,description:'Original verified vectors and rendered PNGs for local review.',
+    licence:'DRAFT licence for owner review: commercial project use is proposed; redistribution is prohibited. These terms are not owner-approved.',price:'3.99'},
+    evidence:{rights:{statement:'Original geometry is supported by the attached source document; owner rights attestation remains pending.',artifact_id:evidence}}};
+  const before=JSON.stringify(args),result=await registry.dispatch({id:'draft-terms-local-stage',name:'commerce.propose',args},lead);
+  assert.equal(result.isError,false,result.content);assert.equal(calls.length,1);assert.equal(calls[0].url,PROPOSAL_ENDPOINT);
+  assert.equal(calls[0].options.method,'POST');assert.deepEqual(calls[0].payload.fields,args.fields);assert.deepEqual(calls[0].payload.evidence,args.evidence);
+  assert.equal(JSON.stringify(args),before,'The source draft terms and selected files are preserved.');
+  const saved=JSON.parse(result.content);assert.equal(saved.proposal.status,'staged');assert.equal(saved.proposal.external_status,'not_requested');
+  assert.ok(!Object.hasOwn(calls[0].payload,'approved'));assert.ok(!Object.hasOwn(calls[0].payload,'confirm_upload'));
+  const tool=registry.get('commerce.propose');assert.equal(tool.scope,'write');assert.equal(tool.requiresConsent,true);
+  for(const phrase of ['BEFORE owner approval','PROPOSED licence and price','exact buyer ZIP','Flo notifications','task-only licence gate',
+    'Reviewer Markdown cannot forbid','never edits a shop','separate verified connector and owner approval'])assert.ok(tool.description.includes(phrase));
+});
 test('Missing host context, malformed field/intent or no buyer selection fails before any transport',async()=>{
   let calls=0;const fetch=async()=>{calls++;throw Error('must not request');};
   for(const args of [{...proposalArgs,fields:{password:'private'}},{...proposalArgs,intent:'buy'},{...proposalArgs,buyer_artifact_ids:[]},
