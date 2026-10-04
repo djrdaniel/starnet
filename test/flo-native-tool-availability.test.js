@@ -11,6 +11,9 @@ const { makeRegistry } = require('../sidecar/tools/registry.js');
 const { makeWebTools } = require('../sidecar/tools/builtin/web.js');
 const { makeOrchestrationTools } = require('../sidecar/tools/builtin/orchestration.js');
 const { makeStationTools } = require('../sidecar/tools/builtin/station.js');
+const { makeFloNativeCommerce } = require('../sidecar/flo-native-commerce.js');
+const { makeFloNativeSvgExport } = require('../sidecar/flo-native-svg-export.js');
+const knowledge = require('../sidecar/flo-station-knowledge.js');
 const { runAgentLoop } = require('../sidecar/loop.js');
 const { makeCostEngine } = require('../sidecar/cost.js');
 
@@ -35,6 +38,8 @@ const wireStart = source.indexOf('  const directDomainWithheld =');
 const wireEnd = source.indexOf('  // WITHHELD-vs-UNKNOWN', wireStart);
 const guardStart = source.indexOf('    if (directDomainTask && directDomainWithheld(c.name))');
 const guardEnd = source.indexOf('    // TAINT ENFORCEMENT', guardStart);
+const grantStart = source.indexOf("  if (floNative && floProfile.id === 'flo-operator') for (const name of");
+const grantEnd = source.indexOf('  /* TOOL FOOTPRINT', grantStart);
 assert.ok(wireStart > 0 && wireEnd > wireStart && guardStart > 0 && guardEnd > guardStart);
 
 function fixture({ native = true, worker = false, text = message, deferAll = false, env = {}, lookup = null } = {}) {
@@ -50,6 +55,11 @@ function fixture({ native = true, worker = false, text = message, deferAll = fal
       providerCalls.push(child); return { reason: 'done', messages: [{ role: 'assistant', content: 'Actual isolated worker result' }], artifacts: [] };
     } }).register(registry);
   makeStationTools({ station: { request: async () => ({ ok: true, result: { sessions: [], count: 0 } }) } }).register(registry);
+  makeFloNativeCommerce({ key: () => '', context: () => null, fetch: async () => { throw Error('No local transport in this projection fixture'); } }).register(registry);
+  knowledge.registerKnowledge(registry);
+  makeFloNativeSvgExport({ root: '/unused-isolated-projection' }).register(registry);
+  for (const name of ['station.build', 'team.list']) registry.register({ name, capability: 'orchestrator', scope: name === 'station.build' ? 'write' : 'read',
+    schema: { type: 'object', properties: {} }, run: async () => ({ content: 'Unused projection fixture' }) });
   const station = { agents: { agent: { id: 'agent', room: 'office' } }, rooms: { office: {
     id: 'office', objects: composeOffice({ surface: 'autonomous', lead: !worker }) } } };
   const profile = native ? profiles.resolve(worker ? 'flo-operator-worker' : 'flo-operator') : null;
@@ -59,7 +69,7 @@ function fixture({ native = true, worker = false, text = message, deferAll = fal
   const o = { floNativeAuthority: native ? authority : {}, floNativePass: native ? {} : undefined };
   // Execute the actual host classifier, advertisement and dispatch restriction
   // seams against the genuine placed-capability projection and registry.
-  const policy = vm.runInNewContext(declaration('floNative') + '\n' + declaration('directDomainTask') + '\n'
+  const policy = vm.runInNewContext(declaration('floNative') + '\n' + source.slice(grantStart, grantEnd) + '\n' + declaration('directDomainTask') + '\n'
     + declaration('deferralOff') + '\n' + source.slice(wireStart, wireEnd)
     + '\n({ floNative, directDomainTask, deferralOff, toolDefs, deferredToolDefs, fromWire, '
     + 'guard: c => {\n' + source.slice(guardStart, guardEnd) + '\nreturn null; } })', {
@@ -82,7 +92,7 @@ test('Default ongoing income goal keeps genuine native lead delegation and publi
   assert.equal(DomainTask.classify(message).host, 'itch.io', 'The old heuristic demonstrably misclassified the real composite goal.');
   const f = fixture(), names = f.policy.toolDefs.map(def => def.function.name);
   assert.equal(f.policy.floNative, true); assert.equal(f.policy.directDomainTask, null);
-  for (const name of ['team_dispatch', 'team_summon', 'session_list', 'task_create', 'station_layout', 'web_search', 'web_fetch']) {
+  for (const name of ['team_dispatch', 'team_summon', 'session_list', 'task_create', 'station_layout', 'web_search', 'web_fetch', 'commerce_read', 'commerce_propose', 'asset_svg_info', 'asset_export_svg']) {
     assert.ok(names.includes(name), name + ' is actually declared from the native registry on the first model request.');
   }
   assert.equal(f.policy.deferredToolDefs.length, 0);
@@ -148,7 +158,10 @@ test('Native direct advertisement handles admitted deferred names without restor
   assert.equal(lead.policy.deferredToolDefs.length, 0);
   const worker = fixture({ worker: true, deferAll: true }), names = worker.policy.toolDefs.map(def => def.function.name);
   assert.ok(names.includes('web_fetch')); assert.ok(names.includes('web_search'));
+  assert.ok(names.includes('asset_svg_info')); assert.ok(names.includes('asset_export_svg'));
   assert.ok(names.every(name => !/^team_|^session_|^task_|^station_/.test(name)));
   assert.equal(worker.capCtx.canUse({ name: 'team.dispatch' }).ok, false);
+  assert.equal(worker.capCtx.canUse({ name: 'commerce.propose' }).ok, false);
+  assert.ok(!names.includes('commerce_propose'), 'The child cannot forge the lead staging context.');
   assert.equal(worker.policy.deferredToolDefs.length, 0);
 });

@@ -366,6 +366,7 @@ function makeOpenAiCompat(deps) {
         station_operator: '/v1/station/operator',
         station_brief: '/v1/station/brief',
         station_setup: '/v1/station/setup',
+        station_managed_settings: '/v1/station/managed-settings',
         station_operations: '/v1/station/operations',
         station_operation_action: '/v1/station/operations/{id}/action',
         station_artifact: '/v1/station/operations/{id}/artifacts/{artifact_id}',
@@ -752,6 +753,7 @@ function makeOpenAiCompat(deps) {
     if (p === '/v1/station/operator' && method === 'GET') { runGuard(handleStationOperator(req, res), res); return true; }
     if (p === '/v1/station/operations' && ['GET', 'POST'].includes(method)) { runGuard(handleNativeOperation(req, res), res); return true; }
     if (p === '/v1/station/brief' && method === 'POST') { runGuard(handleStationSetup(req, res, 'brief'), res); return true; }
+    if (p === '/v1/station/managed-settings' && method === 'POST') { runGuard(handleStationSetup(req, res, 'managed-settings'), res); return true; }
     if (p === '/v1/station/setup' && ['GET', 'POST'].includes(method)) { runGuard(handleStationSetup(req, res, method === 'GET' ? 'proposal' : 'setup'), res); return true; }
     if (p === '/v1/chat/completions' && method === 'POST') { return runGuard(handleReservedChat(req, res), res), true; }
     if (p === '/v1/runs' && method === 'POST') { return runGuard(handleRunsCreate(req, res), res), true; }

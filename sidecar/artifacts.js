@@ -127,6 +127,18 @@
       try {
         ob = ob || {};
         const r = ob.result;
+        if (String(ob.toolName || ob.name || '') === 'asset.export_svg') {
+          // Host-returned verified receipts survive output truncation and a
+          // partial export failure. Requested names or unverified writes never
+          // masquerade as files. Native operation capture reads the bytes again.
+          const receipt = r && r.mutationReceipt;
+          if (receipt && receipt.object === 'starnet.svg_export' && receipt.operation === 'asset.export_svg' && Array.isArray(receipt.files)) {
+            for (const file of receipt.files.slice(0, 65)) if (file && file.state === 'read-back-verified'
+              && typeof file.path === 'string' && /^exports\/svg-[a-f0-9]{24}\/[A-Za-z0-9_.-]+\.png$/.test(file.path)
+              && /^[a-f0-9]{64}$/.test(file.sha256 || '') && Number.isSafeInteger(file.bytes) && file.bytes > 0) addFile('file', file.path, file.bytes);
+          }
+          return;
+        }
         if (!r || r.ok === false || r.isError) return;
         const name = String(ob.toolName || ob.name || '');
         const args = (ob.args && typeof ob.args === 'object') ? ob.args : {};

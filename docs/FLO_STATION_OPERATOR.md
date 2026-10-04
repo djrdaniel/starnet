@@ -50,11 +50,59 @@ product, launch and release facts through one fixed authenticated loopback GET;
 it performs no live store request, and supplies no credentials or buyer data.
 Connection evidence and staged files must never be presented as sales or profit.
 
+The native-only `asset.svg_info` / `asset.export_svg` tools now provide local
+SVG production through the existing sharp dependency. Sixteen caller-jailed,
+bounded geometry SVGs can produce 64 transparent square PNGs at 32/64/128/256px
+plus a contact sheet. Exact source hashes are checked before rendering and again
+before file writes; source/output links, traversal and reserved worker IDs are
+refused. A conservative tag/attribute parser excludes entities, XML instructions,
+CSS, scripts, foreignObject, images, fonts/text, filters and external resources.
+Rendering has bounded dimensions, geometry/byte limits and local sharp deadlines.
+Smaller sizes resample the verified 256px render. Deterministic output bundles
+use create-only writes and fsync/read-back receipts; existing edits are preserved.
+Cancellation and partial failure retain truthful verified-file receipts. Genuine
+deliverable events and the per-run artifact collector feed the existing native
+operation verifier; its 200-file native cap now accommodates the actual pack
+instead of silently dropping exports after 50 files. Ordinary run caps stay 50.
+Both native lead and children receive this fixed tool, with no generic binary
+writer, shell, network, provider, store-write or publishing grant. Exporting files
+does not prove visual/design quality, licence rights, store readiness or revenue.
+`test/flo-native-svg-export.test.js` exercises actual sharp-rendered PNG pixels,
+signatures/dimensions, hashes, replay preservation, unsafe inputs/links, pause,
+partial receipts and the real durable native artifact capture in temp workspaces.
+
+`commerce.propose` adds one fixed authenticated loopback POST to Flo's local
+proposal ledger (64 KiB / five seconds, no redirect or automatic retry). Only
+the admitted native lead receives this tool; workers deliver verified files and
+the lead stages their actual operation artifact IDs. The host supplies the
+operation, parent run and exact tool-call receipt. Proposal/rights facts remain
+claims for review, never owner approval. Etsy physical listing/shop/image intents
+and itch buyer-package/page intents stage locally; they do not edit a store,
+upload, publish or spend. Buyer file selection is separate from research/rights
+evidence. Read-back verifies the saved-local schema and SHA-256 proposal revision;
+an exact duplicate reports its existing saved review/external outcome.
+The artifact-ID bound is 96 files, with Flo enforcing a shared 16 MiB verified
+file total; transport metadata remains bounded. Internal concept/style choices,
+inventories, filenames and iterative design QA are already admitted. Generated
+Markdown "owner gates" cannot invent further approval requirements; external
+publication, fees and owner rights attestation keep their specific approval.
+
+The owner-only managed-settings correction uses the same canonical backup,
+receipt and revision CAS. It resolves the active operation objective on the host,
+aligns saved crew/global reasoning to high, and repairs the Commander goal text
+while retaining quest IDs, progress, milestones and queued next steps. Providers,
+models, profiles, grants, floor and worker documents are preserved. This source
+mechanism does not apply itself or start work; the authenticated owner action
+requires current operation ID, reviewed save revision, request ID and confirmation
+while native work is idle. Focused registered-tool/projection and actual HTTP
+settings tests are included in the standard fast manifest.
+
 | Route | Native operation contract |
 | --- | --- |
 | `GET /v1/station/operations` | Read actual operation, worker activity, limits, events, verified files and exact action receipts; starts nothing. |
 | `POST /v1/station/operations` | Confirm one objective, unique `request_id` and `once` or `ongoing` mode; enroll and verify the actual native save before admission. |
 | `POST /v1/station/operations/{id}/action` | Confirm `pause`, `resume` or `stop` for the exact current operation and request ID. Pause/stop cancel the lead and its children. |
+| `POST /v1/station/managed-settings` | Confirm the current `operation_id`, `expected_revision`, unique `request_id` and `confirm:true` while idle; resolve goal on the host and align saved high reasoning without changing grants or quest progress. |
 | `GET /v1/station/operations/{id}/artifacts/{id}` | Reopen the worker-jail file, compare its saved bounded byte count and SHA-256, and return a safe attachment. Changed files require a new delivery receipt. |
 
 The operation ledger commits before provider work and before each shared-budget

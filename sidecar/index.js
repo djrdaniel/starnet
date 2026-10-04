@@ -9368,7 +9368,8 @@ const nativeStation = makeFloNativeStation({ fs, path, workspaces: WORKSPACES, s
       }
       agentRoster.set(a.id, Object.assign({}, old || {}, { system, name: a.name || a.id,
         role: a.role || old && old.role || 'specialist', provider: old && old.provider || a.provider,
-        model: old && old.model || a.model, reasoningEffort: old && old.reasoningEffort || a.reasoningEffort || 'medium',
+        model: old && old.model || a.model, reasoningEffort: next.floNative && next.floNative.managed_settings
+          ? a.reasoningEffort || 'high' : old && old.reasoningEffort || a.reasoningEffort || 'medium',
         approvalMode: old && old.approvalMode || a.approvalMode || 'ask',
         executionProfile: old && old.executionProfile || a.executionProfile || 'trusted-project',
         skills: old && old.skills || a.skills || [], track: old && old.track || '' }));
@@ -9383,6 +9384,12 @@ const nativeStation = makeFloNativeStation({ fs, path, workspaces: WORKSPACES, s
     const dossier = require('../frontend/app/dossier.js').hydrate(next.dossier);
     const block = require('../frontend/app/dossier.js').composeBlock(dossier, { maxChars: 4096 });
     saveResilient(DOSSIER_FILE, { block }); commanderDossier.load();
+    const managedGoal = require('./flo-native-station.js').managedCommanderGoal(commanderGoals.get(), next);
+    if (managedGoal) {
+      // Keep real quest IDs, milestones and progress while repairing the old
+      // digital-Etsy objective from the reviewed canonical operation source.
+      saveResilient(GOALS_FILE, { goal: managedGoal }); commanderGoals.load();
+    }
     const readiness = require('../frontend/app/understanding.js').readiness(dossier);
     commanderPosture.set(null, { known: require('../frontend/app/dossier.js').summary(dossier).known,
       beliefs: dossier.dims, ready: { ok: readiness.ready, reasons: readiness.reasons } });
@@ -9524,7 +9531,14 @@ const openaiCompat = makeOpenAiCompat({
       ? updatePreparation.beginRequest(action === 'proposal' ? 'GET' : 'POST', '/v1/station/' + action)
       : { ok: true, release() {} };
     if (!ticket.ok) return { ok: false, code: 423, frozen: true, error: 'StarNet is frozen at a verified pre-update recovery point.' };
-    try { return action === 'brief' ? stationSetup.brief(body) : action === 'proposal' ? stationSetup.proposal() : stationSetup.setup(body); }
+    try {
+      if (action === 'managed-settings') {
+        return require('./flo-native-station.js').applyManagedSettingsRequest(body, {
+          operation: () => nativeOperations.snapshot().operation,
+          busy: () => !!(runs.size || hostLiveRuns.size || pendingByRun.size), station: nativeStation });
+      }
+      return action === 'brief' ? stationSetup.brief(body) : action === 'proposal' ? stationSetup.proposal() : stationSetup.setup(body);
+    }
     finally { ticket.release(); }
   },
   stationConsent: request => {
@@ -16576,7 +16590,7 @@ async function runOnceCore(o) {
      a watched run may recover exactly one call only through a fresh confirmation after the taint occurred. */
   const execution = makeRunExecutionState({
     initialTaint: o.initialTaint ? String(o.initialTaint === true ? 'scheduled upstream context' : o.initialTaint) : null,
-    artifacts: makeArtifactCollector(),
+    artifacts: makeArtifactCollector(floNative ? { maxEntries: 200 } : undefined),
     completion: makeCompletionEvidence({ authority: completionAuthority }),
     now: () => Date.now()
   });
@@ -17178,13 +17192,11 @@ async function runOnceCore(o) {
       } });
     stationKnowledge.registerKnowledge(registry);
     const commerceReader = require('./flo-native-commerce.js').makeFloNativeCommerce({ fetch: globalThis.fetch,
-      key: () => String(ENV('API_KEY') || ENV('V1_KEY') || '').trim() });
-    registry.register({ name: 'commerce.read', capability: 'orchestrator', scope: 'read', requiresConsent: false,
-      description: 'Read actual saved Flo commerce connection readiness, physical Etsy and digital itch product/release records and known dependencies. Read-only local records; no external request, buyer identity, credentials, publication or purchases.',
-      schema: { type: 'object', additionalProperties: false, properties: {} }, run: async () => {
-        const result = await commerceReader.read();
-        return { content: result.content, summary: result.summary, isError: !result.ok };
-      } });
+      key: () => String(ENV('API_KEY') || ENV('V1_KEY') || '').trim(),
+      context: () => ({ operation_id: o.floNativePass.operation.id, run_id: runId,
+        call_id: (nativeToolCall.getStore() || {}).requestId }) });
+    commerceReader.register(registry);
+    require('./flo-native-svg-export.js').makeFloNativeSvgExport({ root: WORKSPACES, fsp }).register(registry);
     registry.register({ name: 'team.list', capability: 'orchestrator', scope: 'read', requiresConsent: false,
       description: 'Inspect the actual native crew, IDs, saved roles and models before recruiting or dispatching. No agent creation or provider changes.',
       schema: { type: 'object', properties: {} }, run: async () => ({ content: JSON.stringify(nativeOperations.snapshot().workers), summary: 'Real native crew' }) });
@@ -17586,9 +17598,16 @@ async function runOnceCore(o) {
   resolved = floCapabilities.restrict(resolved, floProfile);
   // These host-defined tools have no historical catalog entries. Grant them
   // only to the exact admitted native lead; neither floor gear nor JSON can.
-  if (floNative && floProfile.id === 'flo-operator') for (const name of ['station.build', 'station.manual', 'team.list', 'commerce.read']) {
+  if (floNative && floProfile.id === 'flo-operator') for (const name of ['station.build', 'station.manual', 'team.list', 'commerce.read', 'commerce.propose']) {
     const tool = registry.get(name);
     resolved.tools.push(name); resolved.grants.push({ capId: 'orchestrator', tool: name, scope: tool.scope, requiresConsent: tool.requiresConsent, network: false });
+    resolved.approvalRules[name] = { scope: tool.scope, requiresConsent: tool.requiresConsent, network: false }; resolved.networkCaps[name] = false;
+  }
+  // Local binary production is a fixed native grant for lead and children;
+  // a floor object, public profile flag or ordinary run cannot mint it.
+  if (floNative) for (const name of ['asset.svg_info', 'asset.export_svg']) {
+    const tool = registry.get(name);
+    resolved.tools.push(name); resolved.grants.push({ capId: 'cabinet', tool: name, scope: tool.scope, requiresConsent: tool.requiresConsent, network: false });
     resolved.approvalRules[name] = { scope: tool.scope, requiresConsent: tool.requiresConsent, network: false }; resolved.networkCaps[name] = false;
   }
   /* TOOL FOOTPRINT (w2, 2026-09-22) — two more ADVERTISING decisions on the rail CAP_REGISTRY's `deferred: true`

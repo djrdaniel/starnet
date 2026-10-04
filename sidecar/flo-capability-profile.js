@@ -7,14 +7,14 @@ const PROFILES = Object.freeze({
   'flo-research': Object.freeze({ id: 'flo-research', tools: Object.freeze(['web_search', 'web_fetch']), max_tool_calls: 4, max_iterations: 8, max_duration_ms: 300000 }),
   'flo-operator': Object.freeze({ id: 'flo-operator', host_only: true, tools: Object.freeze([
     'web_search', 'web_fetch', 'fs.read', 'fs.write', 'fs.append', 'fs.edit', 'fs.search', 'fs.list', 'fs.patch',
-    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation',
+    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation', 'asset.svg_info', 'asset.export_svg',
     'team.list', 'team.dispatch', 'team.summon', 'team.subagents', 'team.steer',
     'session.list', 'session.create', 'session.peek', 'task.list', 'task.create', 'task.manage',
-    'team.config', 'team.configure', 'station.layout', 'station.build', 'station.manual', 'commerce.read'
+    'team.config', 'team.configure', 'station.layout', 'station.build', 'station.manual', 'commerce.read', 'commerce.propose'
   ]), max_tool_calls: 80, max_iterations: 48, max_duration_ms: 900000 }),
   'flo-operator-worker': Object.freeze({ id: 'flo-operator-worker', host_only: true, tools: Object.freeze([
     'web_search', 'web_fetch', 'fs.read', 'fs.write', 'fs.append', 'fs.edit', 'fs.search', 'fs.list', 'fs.patch',
-    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation'
+    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation', 'asset.svg_info', 'asset.export_svg'
   ]), max_tool_calls: 40, max_iterations: 32, max_duration_ms: 600000 })
 });
 function resolve(value) {

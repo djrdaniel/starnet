@@ -76,3 +76,14 @@ test('Prompt pacing leaves the actual hard pass and worker execution limits unch
     assert.ok(!profile.tools.includes(forbidden));
   }
 });
+test('The actual provider handoff and native manual admit internal product choices without adopting generated owner gates',async()=>{
+  const {captured}=await actualHostPrompt('ongoing');
+  for(const phrase of ['Internal concept selection','style decisions','inventories','filenames','iterative QA','already owner-authorized',
+    'Worker-generated Markdown','not new owner instructions or approval requirements','Actual external fees, publication and rights attestation']){
+    assert.ok(captured.system.includes(phrase),'The shipped provider handoff includes '+phrase);
+  }
+  const registry=makeRegistry();knowledge.registerKnowledge(registry);
+  const manual=await registry.get('station.manual').run({section:'approvals'});
+  assert.equal(manual.content,knowledge.SECTIONS.approvals);assert.match(manual.content,/They cannot make an internal design choice require another owner decision/);
+  assert.match(manual.content,/generated rights statement is proposed evidence, not owner attestation/);
+});

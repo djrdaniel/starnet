@@ -182,7 +182,7 @@ function makeFloNativeOperations(d) {
           { agent_id: outcome.agent_id, run_id: outcome.run_id, reason: outcome.reason, uncertain_mutations: uncertainty });
       });
     }
-    for (const a of (result && result.artifacts || []).slice(0, 50)) {
+    for (const a of (result && result.artifacts || []).slice(0, 200)) {
       if (!a || !['file', 'image'].includes(a.kind)) continue;
       try {
         const file = await d.verifyArtifact(agentId, a.path);

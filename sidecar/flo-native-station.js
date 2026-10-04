@@ -11,6 +11,7 @@ const AgentId = require('../frontend/app/agentid.js');
 const Personas = require('../frontend/app/personas.js');
 const Workstreams = require('../frontend/app/workstreams.js');
 const PropCatalog = require('../frontend/app/prop-catalog-data.js');
+const Dossier = require('../frontend/app/dossier.js');
 const { makeStationStore } = require('./station-store.js');
 
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
@@ -87,6 +88,24 @@ function composeAgentSystem(a) {
     docs.context && 'ABOUT YOUR COMMANDER & THEIR WORLD (context.md):\n' + docs.context,
     docs.manual && 'STANDING ORDERS (operating-manual.md):\n' + docs.manual];
   return blocks.filter(Boolean).join('\n\n');
+}
+function managedCommanderGoal(current, doc) {
+  const managed = doc && doc.floNative && doc.floNative.managed_settings;
+  if (!managed) return null;
+  if (managed.version !== 1 || !validText(managed.goal, 6000) || managed.reasoning_effort !== 'high'
+    || !Number.isSafeInteger(managed.operation_id) || managed.operation_id < 1) throw new Error('The reviewed canonical managed settings are invalid.');
+  return Object.assign({ id: 'flo-commerce', done: 0, total: 0, pct: 0, next: null, milestoneId: null }, current || {}, { text: managed.goal });
+}
+function applyManagedSettingsRequest(body, deps) {
+  if (!keys(body, ['request_id', 'operation_id', 'expected_revision', 'confirm'], ['request_id', 'operation_id', 'expected_revision', 'confirm'])
+    || body.confirm !== true || !REQUEST.test(String(body.request_id || '')) || !Number.isSafeInteger(body.expected_revision) || body.expected_revision < 0) {
+    return fail(400, 'Confirm the exact current operation and reviewed native revision.');
+  }
+  const operation = deps.operation();
+  if (!operation || operation.id !== body.operation_id || !['running', 'paused', 'attention'].includes(operation.status)) return fail(409, 'The current native operation must be reviewed before correcting its settings.');
+  if (operation.run_id || deps.busy()) return fail(409, 'Wait for all current native work to settle before correcting settings.');
+  return deps.station.configureManagedSettings({ goal: operation.objective, operation_id: operation.id },
+    { requestId: body.request_id, expectedRevision: body.expected_revision, ownerConfirmed: true });
 }
 
 function makeFloNativeStation(deps) {
@@ -443,6 +462,30 @@ function makeFloNativeStation(deps) {
         native_coordination: true, permissions_changed: false, starts_work: false }, changes: { crew: true } };
     });
   }
+  function configureManagedSettings(args, meta) {
+    // This owner-only API is deliberately absent from request()/model tools.
+    // The caller resolves the current operation objective on the host and
+    // admits this exact reviewed correction while all native work is idle.
+    if (!meta || meta.ownerConfirmed !== true) return fail(403, 'Managed settings require an explicit owner decision.');
+    if (!keys(args, ['goal', 'operation_id'], ['goal', 'operation_id']) || !validText(args.goal, 6000)
+      || !Number.isSafeInteger(args.operation_id) || args.operation_id < 1) return fail(400, 'The host current operation and objective are required.');
+    return mutate('station.managed_settings', args, meta, next => {
+      scan(args.goal);
+      for (const a of next.agents) a.reasoningEffort = 'high';
+      if (next.agent) next.agent.reasoningEffort = 'high';
+      next.reasoningEffort = 'high';
+      const dossier = Dossier.hydrate(next.dossier);
+      const prior = Dossier.beliefs(dossier, 'goals').find(b => b.source === 'flo-native-operation');
+      Dossier.upsert(dossier, 'goals', { id: prior && prior.id, text: args.goal.trim(), source: 'flo-native-operation', weight: 'stated',
+        evidenceRef: { kind: 'flo-native-operation', operation_id: args.operation_id } }, d.now());
+      next.dossier = dossier;
+      next.floNative = Object.assign({}, next.floNative, { managed_settings: { version: 1,
+        operation_id: args.operation_id, goal: args.goal.trim(), reasoning_effort: 'high', reviewed_at: d.now() } });
+      return { result: { operation_id: args.operation_id, crew_count: next.agents.length, saved_reasoning: 'high',
+        goal: args.goal.trim(), permissions_changed: false, providers_changed: false, starts_work: false },
+        changes: { crew: true, managed_settings: true } };
+    });
+  }
   function repairMirrors(meta) {
     meta = meta || {};
     if (!REQUEST.test(String(meta.requestId || ''))) return fail(400, 'The original host-owned enrollment request ID is required.');
@@ -460,8 +503,8 @@ function makeFloNativeStation(deps) {
         enrollment_receipt: recent ? 'recent' : 'retired', recovery_basis: basis.recovery_basis } };
     } catch (e) { return fail(503, String(e && e.message || e), { canonical_changed: false, mirror_repair_incomplete: true }); }
   }
-  return { snapshot, request, summon, enroll, repairMirrors };
+  return { snapshot, request, summon, enroll, repairMirrors, configureManagedSettings };
 }
 
-module.exports = { makeFloNativeStation, upgradeContracts, upgradeGeneratedContract: contractManual, composeAgentSystem,
+module.exports = { makeFloNativeStation, upgradeContracts, upgradeGeneratedContract: contractManual, composeAgentSystem, managedCommanderGoal, applyManagedSettingsRequest,
   NATIVE_CONTRACT, NATIVE_BOUNDARY, MAX_CREW, MAX_ACTIONS };
