@@ -35,6 +35,14 @@ Nightshift and workshops remain held by the protected managed policy. Paid
 provider/media fallbacks, arbitrary connectors, shell/host paths, DJR control,
 publication, purchases and supplier/customer messages gain no authority.
 
+The ongoing lead prompt selects one verified milestone per pass, prefers one
+foreground delegation batch and instructs at most two, with independent work in
+parallel. It reserves finishing time, saves the next-pass queue and targets a
+clean return within eight minutes. This is prompt pacing; the existing hard
+15-minute / 160-call bounds, failed-work attention rules and authority remain
+unchanged. A milestone delivery does not complete the income objective or prove
+sales or profit.
+
 `station.manual` reads the bundled source-native manual and the integration
 contract. `station.layout` supplies actual coordinates, catalog footprints,
 bindings and routing. `commerce.read` reads bounded saved Flo connection,
