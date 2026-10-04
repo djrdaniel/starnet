@@ -9,6 +9,8 @@ const crypto = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { assertWorkspaceId } = require('./workspace-reserved.js');
 const SIZES = Object.freeze([32, 64, 128, 256]);
+const RENDERER_VERSION = 'svg-png-v2';
+const CONTRAST_POLICY = 'alpha-weighted-luma-v1';
 const LIMITS = Object.freeze({ sources: 16, source_bytes: 128 * 1024, total_source_bytes: 1024 * 1024,
   output_bytes: 16 * 1024 * 1024, nodes: 2048, dimension: 4096, path_chars: 32768 });
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -145,7 +147,8 @@ function makeFloNativeSvgExport(options) {
     } catch (e) { if (e.toolSummary) throw e; fail('SVG source is unavailable or could not be safely validated in this worker workspace.'); }
   }
   async function exportSvg(args, ctx) {
-    const receipt = { object: 'starnet.svg_export', version: 1, operation: 'asset.export_svg', state: 'attempted', sources: [], files: [] }; let activeWrite = false;
+    const receipt = { object: 'starnet.svg_export', version: 1, renderer_version: RENDERER_VERSION,
+      operation: 'asset.export_svg', state: 'attempted', sources: [], files: [] }; let activeWrite = false;
     try {
       abort(ctx); if (!plain(args) || Object.keys(args).some(k => !['sources', 'sizes', 'contact_sheet'].includes(k)) || !Array.isArray(args.sources) || !args.sources.length || args.sources.length > LIMITS.sources
         || args.contact_sheet !== undefined && typeof args.contact_sheet !== 'boolean') fail('Export one to sixteen hashed SVG sources with fixed PNG sizes.');
@@ -158,7 +161,10 @@ function makeFloNativeSvgExport(options) {
         if (info.sha256 !== spec.sha256) fail('SVG input changed since its hash receipt; inspect it again before exporting.'); inputBytes += bytes.length;
         if (inputBytes > LIMITS.total_source_bytes) fail('SVG inputs exceed the shared byte allowance.'); inputs.push({ ...info, path: p, bytes }); }
       receipt.sources = inputs.map(({ path: p, sha256, bytes }) => ({ path: p, sha256, bytes: bytes.length }));
-      const key = hash(Buffer.from(JSON.stringify({ sources: receipt.sources, sizes: selectedSizes, contact_sheet: contact }))).slice(0, 24), folder = 'exports/svg-' + key;
+      // Rendering/contrast policy participates in bundle identity. An upgraded
+      // contact sheet therefore creates a new bundle, preserving old exports.
+      const key = hash(Buffer.from(JSON.stringify({ renderer_version: RENDERER_VERSION, contrast_policy: CONTRAST_POLICY,
+        sources: receipt.sources, sizes: selectedSizes, contact_sheet: contact }))).slice(0, 24), folder = 'exports/svg-' + key;
       const outputs = [], tiles = []; let outputBytes = 0;
       for (let n = 0; n < inputs.length; n++) {
         abort(ctx); const input = inputs[n], slug = path.basename(input.path, path.extname(input.path)).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 48) || 'icon';
@@ -173,8 +179,22 @@ function makeFloNativeSvgExport(options) {
       }
       if (contact) {
         abort(ctx); const columns = Math.min(4, inputs.length), rows = Math.ceil(inputs.length / columns), cell = 128, gap = 16, width = columns * cell + (columns + 1) * gap, height = rows * cell + (rows + 1) * gap;
+        // Inspect only fixed64px RGBA samples of our actual render. Alpha
+        // weights exclude the transparent canvas; no SVG prose/filename or
+        // model-supplied colour can decide preview contrast. The inspection is
+        // bounded to16*4096pixels and does not alter the transparent buyer PNGs.
+        let darkWeight = 0, lightWeight = 0;
+        for (const tile of tiles) {
+          abort(ctx); const pixels = await sharp(tile).resize(64, 64).ensureAlpha().raw().toBuffer();
+          for (let n = 0; n < pixels.length; n += 4) { const weight = pixels[n + 3];
+            if (0.2126 * pixels[n] + 0.7152 * pixels[n + 1] + 0.0722 * pixels[n + 2] < 128) darkWeight += weight; else lightWeight += weight; }
+        }
+        const light = darkWeight >= lightWeight, background = light ? { r: 242, g: 244, b: 248, alpha: 1 } : { r: 24, g: 28, b: 38, alpha: 1 };
+        receipt.contact_sheet = { path: folder + '/contact-sheet.png', contrast_policy: CONTRAST_POLICY,
+          background: light ? '#f2f4f8' : '#181c26', sample_size: 64, sampled_images: tiles.length,
+          dark_alpha_weight: darkWeight, light_alpha_weight: lightWeight };
         const composite = []; for (let n = 0; n < tiles.length; n++) composite.push({ input: await sharp(tiles[n]).resize(cell, cell).png().toBuffer(), left: gap + (n % columns) * (cell + gap), top: gap + Math.floor(n / columns) * (cell + gap) });
-        const bytes = await sharp({ create: { width, height, channels: 4, background: { r: 24, g: 28, b: 38, alpha: 1 } } }).composite(composite).png().toBuffer();
+        const bytes = await sharp({ create: { width, height, channels: 4, background } }).composite(composite).png().toBuffer();
         outputs.push({ path: folder + '/contact-sheet.png', bytes, width, height }); outputBytes += bytes.length;
       }
       if (outputBytes > LIMITS.output_bytes || outputs.some(o => o.bytes.length > 8 * 1024 * 1024)) fail('PNG outputs exceed the bounded artifact allowance.');
@@ -217,4 +237,4 @@ function makeFloNativeSvgExport(options) {
   }
   return { inspect, exportSvg, register };
 }
-module.exports = { makeFloNativeSvgExport, validateSvg, SIZES, LIMITS };
+module.exports = { makeFloNativeSvgExport, validateSvg, SIZES, LIMITS, RENDERER_VERSION, CONTRAST_POLICY };

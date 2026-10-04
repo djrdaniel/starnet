@@ -5,6 +5,7 @@ test/flo-native-station.test.js
 test/flo-native-refresh.test.js
 test/flo-native-dispatch-profile.test.js
 test/flo-native-dispatch-outcomes.test.js
+test/flo-native-deliveries.test.js
 test/flo-native-tool-availability.test.js
 test/flo-native-pass-pacing.test.js
 test/dispatch.structured-cancellation.test.js

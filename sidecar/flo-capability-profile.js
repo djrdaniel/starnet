@@ -10,11 +10,11 @@ const PROFILES = Object.freeze({
     'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation', 'asset.svg_info', 'asset.export_svg',
     'team.list', 'team.dispatch', 'team.summon', 'team.subagents', 'team.steer',
     'session.list', 'session.create', 'session.peek', 'task.list', 'task.create', 'task.manage',
-    'team.config', 'team.configure', 'station.layout', 'station.build', 'station.manual', 'commerce.read', 'commerce.propose'
+    'team.config', 'team.configure', 'station.layout', 'station.build', 'station.manual', 'station.deliveries', 'station.delivery_read', 'commerce.read', 'commerce.propose'
   ]), max_tool_calls: 80, max_iterations: 48, max_duration_ms: 900000 }),
   'flo-operator-worker': Object.freeze({ id: 'flo-operator-worker', host_only: true, tools: Object.freeze([
     'web_search', 'web_fetch', 'fs.read', 'fs.write', 'fs.append', 'fs.edit', 'fs.search', 'fs.list', 'fs.patch',
-    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation', 'asset.svg_info', 'asset.export_svg'
+    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation', 'asset.svg_info', 'asset.export_svg', 'station.delivery_read'
   ]), max_tool_calls: 40, max_iterations: 32, max_duration_ms: 600000 })
 });
 function resolve(value) {

@@ -50,6 +50,33 @@ product, launch and release facts through one fixed authenticated loopback GET;
 it performs no live store request, and supplies no credentials or buyer data.
 Connection evidence and staged files must never be presented as sales or profit.
 
+`station.deliveries` makes settled worker deliveries usable in the same parent
+pass. Its host-owned current-operation manifest returns verified32hex artifact
+IDs, source worker/run, paths, byte counts and SHA-256; ordinary dispatcher
+path observations and `file_` UI IDs cannot be staged. Pages contain at most25
+entries and fit both16KiB and the actual registry result budget. An optional
+worker selector and the returned cursor are the only model inputs. Cursors bind
+the full selected manifest and parent pass, so changed delivery receipts require
+a fresh first page instead of silently shifting pagination. Only the admitted
+lead can list this manifest; no file bytes, arbitrary operation or host paths
+are exposed by listing.
+
+The lead passes exact artifact IDs/hashes to an independent QA worker.
+`station.delivery_read({artifact_id,sha256})` is available only to admitted native
+lead/children. It reads the current operation's matching receipt through the
+existing worker-jail artifact verifier, compares bytes and SHA-256 again, and
+rechecks current admission after reading. UTF-8 text is limited to32KiB and the
+conversation result budget; PNG/JPEG is limited to1MiB and uses the existing
+`images:[{mime,data}]` channel so the reviewer sees genuine pixels through the
+normal loop and Codex `input_image` adapter. Other formats, unknown/stale hashes,
+changed files, pause races, arbitrary paths/URLs and public profiles are refused.
+Reads create no production artifact or filesystem effect; delivered prose and
+pixels are fenced as untrusted evidence. The lead's own writes are captured on
+its final return; a complete delegated bundle permits same-pass staging and QA.
+`test/flo-native-deliveries.test.js` exercises genuine dispatch,83 actual saved
+SVG/PNG/document receipts, an independent worker's text/pixel review and a
+same-pass inert commerce proposal, alongside pagination and admission refusals.
+
 The native-only `asset.svg_info` / `asset.export_svg` tools now provide local
 SVG production through the existing sharp dependency. Sixteen caller-jailed,
 bounded geometry SVGs can produce 64 transparent square PNGs at 32/64/128/256px
@@ -70,6 +97,16 @@ does not prove visual/design quality, licence rights, store readiness or revenue
 `test/flo-native-svg-export.test.js` exercises actual sharp-rendered PNG pixels,
 signatures/dimensions, hashes, replay preservation, unsafe inputs/links, pause,
 partial receipts and the real durable native artifact capture in temp workspaces.
+
+Contact-sheet renderer `svg-png-v2` selects a light background for predominantly
+dark artwork and a dark background for predominantly light artwork. The choice
+uses alpha-weighted luminance from fixed64px samples of the actual PNG renders
+(maximum16×4096pixels); transparent canvas contributes no colour vote. The
+receipt records the policy, selected background and measured alpha weights.
+Renderer/policy identity participates in the export bundle hash, preserving
+older sheets instead of overwriting them. Transparent buyer PNG pixels are
+unchanged. Actual black/white pixel tests verify contrast and old-file retention;
+this readability correction does not constitute independent visual design QA.
 
 `commerce.propose` adds one fixed authenticated loopback POST to Flo's local
 proposal ledger (64 KiB / five seconds, no redirect or automatic retry). Only

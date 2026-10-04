@@ -17196,6 +17196,11 @@ async function runOnceCore(o) {
       context: () => ({ operation_id: o.floNativePass.operation.id, run_id: runId,
         call_id: (nativeToolCall.getStore() || {}).requestId }) });
     commerceReader.register(registry);
+    require('./flo-native-deliveries.js').makeFloNativeDeliveries({
+      snapshot: () => nativeOperations.snapshot(),
+      context: () => ({ operation_id: o.floNativePass.operation.id, run_id: o.floNativePass.runId }),
+      artifact: (operationId, artifactId) => nativeOperations.artifact(operationId, artifactId), imageWire
+    }).register(registry);
     require('./flo-native-svg-export.js').makeFloNativeSvgExport({ root: WORKSPACES, fsp }).register(registry);
     registry.register({ name: 'team.list', capability: 'orchestrator', scope: 'read', requiresConsent: false,
       description: 'Inspect the actual native crew, IDs, saved roles and models before recruiting or dispatching. No agent creation or provider changes.',
@@ -17598,14 +17603,14 @@ async function runOnceCore(o) {
   resolved = floCapabilities.restrict(resolved, floProfile);
   // These host-defined tools have no historical catalog entries. Grant them
   // only to the exact admitted native lead; neither floor gear nor JSON can.
-  if (floNative && floProfile.id === 'flo-operator') for (const name of ['station.build', 'station.manual', 'team.list', 'commerce.read', 'commerce.propose']) {
+  if (floNative && floProfile.id === 'flo-operator') for (const name of ['station.build', 'station.manual', 'station.deliveries', 'team.list', 'commerce.read', 'commerce.propose']) {
     const tool = registry.get(name);
     resolved.tools.push(name); resolved.grants.push({ capId: 'orchestrator', tool: name, scope: tool.scope, requiresConsent: tool.requiresConsent, network: false });
     resolved.approvalRules[name] = { scope: tool.scope, requiresConsent: tool.requiresConsent, network: false }; resolved.networkCaps[name] = false;
   }
   // Local binary production is a fixed native grant for lead and children;
   // a floor object, public profile flag or ordinary run cannot mint it.
-  if (floNative) for (const name of ['asset.svg_info', 'asset.export_svg']) {
+  if (floNative) for (const name of ['asset.svg_info', 'asset.export_svg', 'station.delivery_read']) {
     const tool = registry.get(name);
     resolved.tools.push(name); resolved.grants.push({ capId: 'cabinet', tool: name, scope: tool.scope, requiresConsent: tool.requiresConsent, network: false });
     resolved.approvalRules[name] = { scope: tool.scope, requiresConsent: tool.requiresConsent, network: false }; resolved.networkCaps[name] = false;

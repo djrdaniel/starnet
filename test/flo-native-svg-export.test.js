@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const sharp = require('sharp');
-const { makeFloNativeSvgExport, validateSvg, LIMITS } = require('../sidecar/flo-native-svg-export.js');
+const { makeFloNativeSvgExport, validateSvg, LIMITS, RENDERER_VERSION, CONTRAST_POLICY } = require('../sidecar/flo-native-svg-export.js');
 const { makeRegistry } = require('../sidecar/tools/registry.js');
 const { makeCapCtx } = require('../sidecar/capability/capGate.js');
 const profiles = require('../sidecar/flo-capability-profile.js');
@@ -84,6 +84,32 @@ test('Local gradients/clipping work; unsupported resource/processing/CSS/filter/
   for (let n = 0; n < bad.length; n++) { const source = f.write('bad-' + n + '.svg', bad[n]); await assert.rejects(locked.exportSvg({ sources: [source] }, f.ctx)); }
   assert.equal(renders, 0); assert.equal(allFiles(path.join(f.jail, 'exports')).length, before);
   assert.throws(() => validateSvg(Buffer.from([0xff, 0xfe, 0x00]))); assert.throws(() => validateSvg(Buffer.alloc(LIMITS.source_bytes + 1, 32)));
+});
+
+test('Contact sheets choose actual readable contrast for black/white artwork, preserve transparent PNGs and retain old version bundles', async t => {
+  const f = fixture(t);
+  for (const [name, colour, expectedBackground] of [['black', '#000000', '#f2f4f8'], ['white', '#ffffff', '#181c26']]) {
+    const source = f.write(name + '.svg', svg(colour)), original = fs.readFileSync(path.join(f.jail, source.path));
+    const transparent = await sharp(original, { density: 72 }).resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+    // Real prior-policy pixels under its genuine version-one key establish
+    // that a contrast upgrade neither conflicts with nor replaces old files.
+    const oldKey = digest(Buffer.from(JSON.stringify({ sources: [{ path: source.path, sha256: source.sha256, bytes: original.length }], sizes: [256], contact_sheet: true }))).slice(0, 24);
+    const oldFolder = path.join(f.jail, 'exports/svg-' + oldKey); fs.mkdirSync(oldFolder, { recursive: true });
+    const oldSheet = await sharp({ create: { width: 160, height: 160, channels: 4, background: { r: 24, g: 28, b: 38, alpha: 1 } } })
+      .composite([{ input: await sharp(transparent).resize(128, 128).png().toBuffer(), left: 16, top: 16 }]).png().toBuffer();
+    fs.writeFileSync(path.join(oldFolder, 'contact-sheet.png'), oldSheet);
+    const result = await f.call('asset.export_svg', { sources: [source], sizes: [256] }); assert.equal(result.isError, false, result.content);
+    const receipt = result.mutationReceipt; assert.equal(receipt.renderer_version, RENDERER_VERSION); assert.equal(receipt.contact_sheet.contrast_policy, CONTRAST_POLICY);
+    assert.equal(receipt.contact_sheet.background, expectedBackground); assert.equal(receipt.contact_sheet.sample_size, 64); assert.equal(receipt.contact_sheet.sampled_images, 1);
+    assert.notEqual(receipt.bundle, 'exports/svg-' + oldKey); assert.deepEqual(fs.readFileSync(path.join(oldFolder, 'contact-sheet.png')), oldSheet);
+    const png = receipt.files.find(file => file.path.endsWith('-256.png')), sheet = receipt.files.find(file => file.path.endsWith('contact-sheet.png'));
+    assert.deepEqual(fs.readFileSync(path.join(f.jail, png.path)), transparent, 'Changing sheet contrast must not recolour/flatten transparent buyer artwork.');
+    const { data, info } = await sharp(fs.readFileSync(path.join(f.jail, sheet.path))).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const background = [...data.subarray(0, 4)], at = (80 * info.width + 80) * 4, foreground = [...data.subarray(at, at + 4)];
+    assert.deepEqual(background, name === 'black' ? [242, 244, 248, 255] : [24, 28, 38, 255]);
+    assert.deepEqual(foreground, name === 'black' ? [0, 0, 0, 255] : [255, 255, 255, 255]);
+    const lum = pixel => 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]; assert.ok(Math.abs(lum(background) - lum(foreground)) > 200, 'Real sheet pixels provide visible monochrome contrast.');
+  }
 });
 
 test('The exporter refuses stale hashes, source changes during rendering, oversized requests and arbitrary output authority before PNG writes', async t => {

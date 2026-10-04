@@ -13,6 +13,7 @@ const { makeOrchestrationTools } = require('../sidecar/tools/builtin/orchestrati
 const { makeStationTools } = require('../sidecar/tools/builtin/station.js');
 const { makeFloNativeCommerce } = require('../sidecar/flo-native-commerce.js');
 const { makeFloNativeSvgExport } = require('../sidecar/flo-native-svg-export.js');
+const { makeFloNativeDeliveries } = require('../sidecar/flo-native-deliveries.js');
 const knowledge = require('../sidecar/flo-station-knowledge.js');
 const { runAgentLoop } = require('../sidecar/loop.js');
 const { makeCostEngine } = require('../sidecar/cost.js');
@@ -56,6 +57,7 @@ function fixture({ native = true, worker = false, text = message, deferAll = fal
     } }).register(registry);
   makeStationTools({ station: { request: async () => ({ ok: true, result: { sessions: [], count: 0 } }) } }).register(registry);
   makeFloNativeCommerce({ key: () => '', context: () => null, fetch: async () => { throw Error('No local transport in this projection fixture'); } }).register(registry);
+  makeFloNativeDeliveries({ context: () => null, snapshot: () => null }).register(registry);
   knowledge.registerKnowledge(registry);
   makeFloNativeSvgExport({ root: '/unused-isolated-projection' }).register(registry);
   for (const name of ['station.build', 'team.list']) registry.register({ name, capability: 'orchestrator', scope: name === 'station.build' ? 'write' : 'read',
@@ -92,7 +94,7 @@ test('Default ongoing income goal keeps genuine native lead delegation and publi
   assert.equal(DomainTask.classify(message).host, 'itch.io', 'The old heuristic demonstrably misclassified the real composite goal.');
   const f = fixture(), names = f.policy.toolDefs.map(def => def.function.name);
   assert.equal(f.policy.floNative, true); assert.equal(f.policy.directDomainTask, null);
-  for (const name of ['team_dispatch', 'team_summon', 'session_list', 'task_create', 'station_layout', 'web_search', 'web_fetch', 'commerce_read', 'commerce_propose', 'asset_svg_info', 'asset_export_svg']) {
+  for (const name of ['team_dispatch', 'team_summon', 'session_list', 'task_create', 'station_layout', 'station_deliveries', 'web_search', 'web_fetch', 'commerce_read', 'commerce_propose', 'asset_svg_info', 'asset_export_svg']) {
     assert.ok(names.includes(name), name + ' is actually declared from the native registry on the first model request.');
   }
   assert.equal(f.policy.deferredToolDefs.length, 0);
@@ -159,9 +161,11 @@ test('Native direct advertisement handles admitted deferred names without restor
   const worker = fixture({ worker: true, deferAll: true }), names = worker.policy.toolDefs.map(def => def.function.name);
   assert.ok(names.includes('web_fetch')); assert.ok(names.includes('web_search'));
   assert.ok(names.includes('asset_svg_info')); assert.ok(names.includes('asset_export_svg'));
-  assert.ok(names.every(name => !/^team_|^session_|^task_|^station_/.test(name)));
+  assert.ok(names.every(name => !/^team_|^session_|^task_/.test(name) && (!/^station_/.test(name) || name === 'station_delivery_read')));
+  assert.ok(names.includes('station_delivery_read'), 'A child can review exact verified goal deliveries without an orchestrator grant.');
   assert.equal(worker.capCtx.canUse({ name: 'team.dispatch' }).ok, false);
   assert.equal(worker.capCtx.canUse({ name: 'commerce.propose' }).ok, false);
+  assert.equal(worker.capCtx.canUse({ name: 'station.deliveries' }).ok, false);
   assert.ok(!names.includes('commerce_propose'), 'The child cannot forge the lead staging context.');
   assert.equal(worker.policy.deferredToolDefs.length, 0);
 });

@@ -22,7 +22,7 @@ const css = fs.readFileSync(path.join(__dirname, '../frontend/css/app.css'), 'ut
 
 // ---- 1. the sidecar wiring: collector per run, observed on dispatch, recorded at run end ----
 A.ok(/require\('\.\/artifacts\.js'\)/.test(idx), 'index.js requires the artifacts collector');
-A.ok(/const\s+execution\s*=\s*makeRunExecutionState\(\{[\s\S]*?artifacts:\s*makeArtifactCollector\(\)/.test(idx), 'runOnce builds a fresh per-run collector inside its execution state');
+A.ok(/const\s+execution\s*=\s*makeRunExecutionState\(\{[\s\S]*?artifacts:\s*makeArtifactCollector\(floNative\s*\?\s*\{\s*maxEntries:\s*200\s*\}\s*:\s*undefined\)/.test(idx), 'runOnce builds a fresh per-run collector; only privately admitted native runs get the bounded pack capacity');
 A.ok(/execution\.observeArtifact\(\{\s*toolName:\s*c\.name,\s*args:\s*c\.args,\s*result:\s*r\s*\}\)/.test(idx),
   'every dispatched tool result is observed (toolName/args/result)');
 // the observe sits BEFORE the tool-output budget clip, so parses see the real result text
