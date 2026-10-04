@@ -19,6 +19,13 @@ delegation, tasks, sessions, Dossier text and validated additive construction.
 Foreground parallel delegation stays within one cancellable pass. Background
 dispatch and worker recursion are withheld.
 
+The admitted native lead may move an exact existing task card between `todo`,
+`active` and `shipped` without another owner prompt. `shipped` records verified
+local task completion; it never publishes a product, approves commercial terms
+or establishes revenue. This authority is bound to the validated host tool call,
+not JSON permission fields or saved grants. Archive/remove still require an exact
+owner decision, and ordinary station runs retain their existing board consent.
+
 Native operation goals retain this explicit host-owned scope instead of the
 ordinary single-domain task heuristic. Mentioning `itch.io` in a broad commerce
 goal cannot hide delegation/search or pin all fetching to that one host. The

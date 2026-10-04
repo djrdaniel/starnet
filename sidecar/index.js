@@ -340,6 +340,7 @@ const { makeVerifyTool } = require('./tools/builtin/verify.js');    // the workb
 const { makeLspManager } = require('./lsp-manager.js');             // lazy installed-language-server edit diagnostics
 const { makeOrchestrationTools } = require('./tools/builtin/orchestration.js');   // Stage 2: team.dispatch (lead->worker delegation)
 const { makeStationTools } = require('./tools/builtin/station.js');               // session verbs (list/create/focus) over the station bridge
+const { makeNativeConsent, NATIVE_TASK_DESCRIPTION } = require('./flo-native-consent.js');
 const { makeRoutineTools } = require('./tools/builtin/routines.js'); // ROUTINES: agent-created StarNet cron jobs
 const { makeLoopTools } = require('./tools/builtin/loops.js');       // LOOPS: model-facing durable standing-objective controls
 const { makeCommsTools } = require('./tools/builtin/comms.js');      // COMMS: outbound reach — an agent messages a connected chat
@@ -17162,7 +17163,7 @@ async function runOnceCore(o) {
   // session.list/create/focus: the LEAD's session verbs, over the same station bridge dispatch's resolver
   // uses. Same 'orchestrator' capability gate as team.* — conferred on the lead run only, so a delegated
   // worker can never open or steal the Commander's sessions. Only visual actions require a live page.
-  makeStationTools({ station: runNativeStation || (require('./overseer.js').isCoordinatorRun({ ...o, agentId, surface })
+  const runStationTools = makeStationTools({ station: runNativeStation || (require('./overseer.js').isCoordinatorRun({ ...o, agentId, surface })
     ? overseerStation(o.streamId, runId) : stationBridge), scanText: t => cronGuard.scanRoutinePrompt(t), now: () => Date.now(),
     // station.layout's HARNESS facts (audit 2026-09-28): the plan the router actually holds, each line's effective
     // budget (the runner's own effectiveLimits), and today's numbers since local midnight (the line plate's window)
@@ -17171,7 +17172,9 @@ async function runOnceCore(o) {
       budget: lineId => { const lim = chainEffectiveLimits(router.lineLimits(lineId), {}, linePoolCap());
         return { maxHops: lim.maxHops, maxUsdPerMessage: lim.maxUsd, maxUsdPerDay: lim.maxUsdPerDay, clamped: lim.clamped }; },
       today: () => { const d = new Date(); d.setHours(0, 0, 0, 0); return lineStatsSnapshot(d.getTime()); }
-    } }).register(registry);
+    } });
+  if (floNative) runStationTools.taskManageTool.description = NATIVE_TASK_DESCRIPTION;
+  runStationTools.register(registry);
   if (floNative) {
     registry.register({ name: 'station.layout', capability: 'orchestrator', scope: 'read', requiresConsent: false,
       description: 'Read the canonical native station tile coordinates, real room rectangles, actual gear, crew bindings, belt routing and additive Build limits before changing the floor.',
@@ -17735,19 +17738,8 @@ async function runOnceCore(o) {
     connectorGrant: (call, tool) => !execution.taintedBy() && (ownerTrusted || unattendedGrants.indexOf('connectors') >= 0),
     surface: surface, prompt: prompt
   });
-  const consent = floNative ? async (call, tool) => {
-    if (signal.aborted || !floProfile.tools.includes(call.name)) return { allow: false, reason: 'Native operation cancelled or outside its envelope.' };
-    const protectedTask = call.name === 'task.manage' && (['remove', 'archive'].includes(call.args.action) || call.args.lane === 'shipped');
-    if (protectedTask) {
-      if (!prompt) return { allow: false, reason: 'This board action requires owner review.' };
-      const decision = await prompt(call, tool);
-      if (decision !== 'once') return { allow: false, reason: 'Owner did not approve this exact board action.' };
-      const meta = nativeToolCall.getStore(); if (meta) meta.ownerConfirmed = true;
-    }
-    // Explicitly admitted local station/file operations. This never records a
-    // Full Access, service-key, provider, host-path or external commerce grant.
-    return { allow: true, scope: tool.scope, reason: 'Owner-admitted native operation' };
-  } : ordinaryConsent;
+  const consent = floNative ? makeNativeConsent({ profile: floProfile, signal, prompt,
+    callContext: () => nativeToolCall.getStore() }) : ordinaryConsent;
   // B1 (Cortex seam): thread runId onto capCtx so a tool's dispatch can stamp provenance (sourceRunId)
   // on memory writes. makeCapCtx merges `extra` verbatim; the consumer arrives with M-mem.2.
   let parkSeq = 0;   // distinguishes parked outputs within one run (see parkOutput below)

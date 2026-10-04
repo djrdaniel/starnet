@@ -2,6 +2,7 @@
 test/schema.test.js
 test/overseer.test.js
 test/flo-native-station.test.js
+test/flo-native-board-consent.test.js
 test/flo-native-refresh.test.js
 test/flo-native-dispatch-profile.test.js
 test/flo-native-dispatch-outcomes.test.js

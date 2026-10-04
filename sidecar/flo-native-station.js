@@ -13,6 +13,7 @@ const Workstreams = require('../frontend/app/workstreams.js');
 const PropCatalog = require('../frontend/app/prop-catalog-data.js');
 const Dossier = require('../frontend/app/dossier.js');
 const { makeStationStore } = require('./station-store.js');
+const { validBoardMove, admittedBoardMove } = require('./flo-native-consent.js');
 
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
 const REQUEST = /^[A-Za-z0-9_.:-]{1,180}$/;
@@ -421,7 +422,8 @@ function makeFloNativeStation(deps) {
       }
       if (verb === 'station.manage_task') {
         if (!keys(args, ['task', 'action', 'lane', 'title', 'agentId'], ['task', 'action']) || !['move', 'rename', 'assign', 'archive', 'restore', 'remove'].includes(args.action)) return fail(400, 'Invalid native board action.');
-        if (args.action === 'move' && args.lane === 'shipped' && !(meta && meta.ownerConfirmed)) return fail(403, 'Shipping a board card requires an explicit owner decision.');
+        if (args.action === 'move' && !validBoardMove(args)) return fail(400, 'A board move requires an exact task and a valid lane only.');
+        if (args.action === 'move' && args.lane === 'shipped' && !(meta && meta.ownerConfirmed) && !admittedBoardMove(args, meta)) return fail(403, 'Shipping a board card requires an explicit owner decision or admitted native operation.');
         if (['remove', 'archive'].includes(args.action) && !(meta && meta.ownerConfirmed)) return fail(403, 'Removing or archiving a board card requires an explicit owner decision.');
         return mutate(verb, args, meta, next => {
           const target = resolveStream(next, args.task, 'task', args.action === 'restore');
