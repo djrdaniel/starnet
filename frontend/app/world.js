@@ -629,7 +629,8 @@ const World = (() => {
   }
 
   /* ================= station model + bake ================= */
-  function loadStation(st) {
+  let readingHostStation = false;
+  function loadStation(st, options) {
     if (unsub) { unsub(); unsub = null; }
     station = st; geo = null; cache = null; geoDirty = true; bakeDirty = true; fitNeeded = true;
     novelty = []; seenProps = null; seenBelts = null;   // re-learn the scene from scratch (no cross-station novelty)
@@ -646,7 +647,9 @@ const World = (() => {
     for (const b of crew) if (!b.summoned) seizeFromIdle(b);
     crew = crew.filter(b => b.summoned);                // drop plan-derived crew (rebuilt from the new floor's bays); KEEP summoned crew (app-level, not floor-bound)
     if (station && station.onChange) unsub = station.onChange(() => { geoDirty = true; });
-    rederive();
+    const previousReadback = readingHostStation;
+    readingHostStation = !!(options && options.readOnlyHost);
+    try { rederive(); } finally { readingHostStation = previousReadback; }
   }
 
   function rederive() {
@@ -8601,7 +8604,7 @@ const World = (() => {
       for (const b of (routingPlan.bays || [])) b.objects = station.bayObjects(b.agentId, b.propId);
       for (const b of (routingPlan.dockBays || [])) b.objects = station.bayObjects(b.agentId, b.propId);
     }
-    postRoutingPlan(routingPlan);
+    postRoutingPlan(routingPlan, readingHostStation);
     lineStatsSoon();   // LINE WATCH: the floor's lines changed — re-ask their numbers once the plan has landed
   }
   /* PLAN-POSTER-BEGIN (extraction marker — test/plan-poster.test.js evals this block with injected deps;
@@ -8634,6 +8637,15 @@ const World = (() => {
        routes the line the user just drew, not the last one it heard about. A failed attempt resolves too
        (stale=true, retries continue in the background): the caller refuses rather than running a stale floor. */
     function flush() { return new Promise(resolve => { if (!inflight && timer == null) resolve(state()); else waiters.push(resolve); }); }
+    // A canonical read-back proves the host already installed this plan. Cancel
+    // stale retries and ignore late answers; refreshing the scene is not a new
+    // renderer mutation. The host separately rejects stale revision POSTs.
+    function acceptReadback(hash) {
+      ++seq;
+      if (timer != null) { deps.cancel(timer); timer = null; }
+      lastHash = hash; refusedHash = null; pendingHash = null; inflight = false; stale = false;
+      settle();
+    }
     function offer(plan, hash) {
       if (hash === lastHash) return false;                                   // server already answered this exact floor
       if (hash === pendingHash && (inflight || timer != null)) return false; // same floor already being delivered
@@ -8663,14 +8675,16 @@ const World = (() => {
         fail('http ' + (res ? res.status : '?'));
       }, () => fail('network'));
     }
-    return { offer: offer, state: state, flush: flush };
+    return { offer: offer, state: state, flush: flush, acceptReadback: acceptReadback };
   }
   /* PLAN-POSTER-END */
   // one poster for the module; on transient failure it warns and keeps `stale` true. No new UI surface:
   // an unreachable sidecar already raises the LINK DOWN chrome (linkDown/linkState — the one honest
   // connectivity signal), and _dbgBeltLegibility exposes planSync for the verify harness.
   const planPoster = makePlanPoster({
-    post: plan => fetch(apiUrl('/api/routing'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(plan || {}) }),
+    post: plan => fetch(apiUrl('/api/routing'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, plan || {}, {
+      floBaseSaveRevision: typeof CloudSave !== 'undefined' && CloudSave.revision ? CloudSave.revision() : 0
+    })) }),
     warn: m => { try { console.warn(m); } catch (_) {} },
     delay: (fn, ms) => setTimeout(fn, ms),
     cancel: id => clearTimeout(id)
@@ -8678,7 +8692,7 @@ const World = (() => {
   // post the plan to /api/routing when the floor TOPOLOGY actually changed (hash dedupe — rederive() also runs
   // on pure camera/agent moves). The sidecar REFUSES a non-deployable plan (cycle/orphan) and falls back to its
   // default resolution, so a broken floor disables routed-mode rather than stalling work.
-  function postRoutingPlan(plan) {
+  function postRoutingPlan(plan, readOnlyHost) {
     if (typeof fetch === 'undefined') return;
     // dedupe on topology hash + per-bay caps, so equipping a bay (a capability change with no belt change) still re-POSTs
     const objKey = o => (o && typeof o === 'object') ? (o.objectType + '#' + (o.connectorId || '')) : o;   // connector objs carry a binding; stringify it so a re-bind re-POSTs
@@ -8690,7 +8704,8 @@ const World = (() => {
       // LINE BUDGET rides the key too (2026-08-21): limits live on `lines`, outside plan.hash (policy, not
       // topology — splitter balance must survive a cap edit), but the sidecar's copy must re-read them.
       + '|' + JSON.stringify(plan.lineLimits || {}) + '|' + JSON.stringify((plan.lines || []).map(l => [l.lineId, l.projectRoot || '']))) : '';
-    planPoster.offer(plan, hash);
+    if (readOnlyHost) planPoster.acceptReadback(hash);
+    else planPoster.offer(plan, hash);
   }
   // junction props (splitter/filter/merger) keyed by tile — derived from the compiled plan so the VISUAL engine
   // animates filters + mergers (not just splitters) using the SAME config the dispatch router routes by.

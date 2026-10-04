@@ -366,6 +366,9 @@ function makeOpenAiCompat(deps) {
         station_operator: '/v1/station/operator',
         station_brief: '/v1/station/brief',
         station_setup: '/v1/station/setup',
+        station_operations: '/v1/station/operations',
+        station_operation_action: '/v1/station/operations/{id}/action',
+        station_artifact: '/v1/station/operations/{id}/artifacts/{artifact_id}',
         station_consent: '/v1/station/consents/{run_id}/{prompt_id}',
         station_consent_ack: '/v1/station/consents/{run_id}/{prompt_id}/ack',
         health: '/health'
@@ -417,6 +420,29 @@ function makeOpenAiCompat(deps) {
     json(res, code, out);
   }
 
+  async function handleNativeOperation(req, res, id) {
+    if (typeof d.stationOperations !== 'function') return json(res, 503, openAiError('Native station operation is unavailable.', { code: 'station_unavailable' }));
+    let body;
+    if (req.method === 'POST') {
+      try { body = JSON.parse(await readBody(req, 12000) || '{}'); }
+      catch (_) { return json(res, 400, openAiError('Invalid JSON in request body')); }
+    }
+    const result = await d.stationOperations(req.method === 'GET' ? 'snapshot' : id ? 'action' : 'start', body, id);
+    if (req.method === 'GET') return json(res, 200, result);
+    const out = Object.assign({}, result); delete out.code;
+    return json(res, result && result.ok ? 200 : result && result.code || 503, out);
+  }
+  async function handleNativeArtifact(_req, res, id, artifactId) {
+    if (typeof d.stationArtifact !== 'function') return json(res, 503, openAiError('Native artifact is unavailable.'));
+    try {
+      const file = await d.stationArtifact(Number(id), artifactId);
+      const filename = String(file.title || 'station-file').replace(/[^A-Za-z0-9_. -]/g, '_').slice(0, 100);
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': file.bytes.length,
+        'Content-Disposition': 'attachment; filename="' + filename + '"', 'X-Content-SHA256': file.sha256,
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(file.bytes);
+    } catch (_) { json(res, 409, openAiError('This artifact could not be verified against its recorded native delivery.')); }
+  }
+
   // ---- POST /v1/chat/completions ----------------------------------------------------------------------------
   async function handleChatCompletions(req, res, suppliedBody, reservedId) {
     if (maxConcurrent() > 0 && inFlight >= maxConcurrent()) {
@@ -425,6 +451,12 @@ function makeOpenAiCompat(deps) {
     let body;
     try { body = suppliedBody || JSON.parse(await readBody(req, MAX_BODY) || '{}'); } catch (_) { return json(res, 400, openAiError('Invalid JSON in request body')); }
     if (!body || typeof body !== 'object') return json(res, 400, openAiError('Invalid JSON in request body'));
+    if (body.capability_profile !== undefined) {
+      let profile;
+      try { profile = floCapabilities.resolve(body.capability_profile); }
+      catch (e) { return json(res, 400, openAiError(e.message, { code: 'unknown_capability_profile' })); }
+      if (profile && profile.host_only) return json(res, 403, openAiError('Native operator profiles require an owner-admitted station operation.', { code: 'host_only_profile' }));
+    }
     const parsed = splitMessages(body.messages);
     if (!parsed.ok) return json(res, 400, openAiError(parsed.reason === 'messages' ? "Missing or invalid 'messages' field" : 'No user message found in messages'));
 
@@ -606,6 +638,7 @@ function makeOpenAiCompat(deps) {
     let capabilityProfile;
     try { capabilityProfile = floCapabilities.resolve(body.capability_profile); }
     catch (error) { return json(res, 400, openAiError(error.message, { code: 'unknown_capability_profile', param: 'capability_profile' })); }
+    if (capabilityProfile && capabilityProfile.host_only) return json(res, 403, openAiError('Native operator profiles require an owner-admitted station operation.', { code: 'host_only_profile' }));
     const capabilityGuard = floCapabilities.makeGuard(capabilityProfile);
     const runId = 'run_' + String(newId()).replace(/-/g, '');
     const modelField = String(body.model || DEFAULT_MODEL_ID);
@@ -717,11 +750,14 @@ function makeOpenAiCompat(deps) {
     if (p === '/v1/models' && method === 'GET') { handleModels(req, res); return true; }
     if (p === '/v1/capabilities' && method === 'GET') { handleCapabilities(req, res); return true; }
     if (p === '/v1/station/operator' && method === 'GET') { runGuard(handleStationOperator(req, res), res); return true; }
+    if (p === '/v1/station/operations' && ['GET', 'POST'].includes(method)) { runGuard(handleNativeOperation(req, res), res); return true; }
     if (p === '/v1/station/brief' && method === 'POST') { runGuard(handleStationSetup(req, res, 'brief'), res); return true; }
     if (p === '/v1/station/setup' && ['GET', 'POST'].includes(method)) { runGuard(handleStationSetup(req, res, method === 'GET' ? 'proposal' : 'setup'), res); return true; }
     if (p === '/v1/chat/completions' && method === 'POST') { return runGuard(handleReservedChat(req, res), res), true; }
     if (p === '/v1/runs' && method === 'POST') { return runGuard(handleRunsCreate(req, res), res), true; }
     let m;
+    if ((m = p.match(/^\/v1\/station\/operations\/([1-9]\d{0,9})\/action$/)) && method === 'POST') { runGuard(handleNativeOperation(req, res, Number(m[1])), res); return true; }
+    if ((m = p.match(/^\/v1\/station\/operations\/([1-9]\d{0,9})\/artifacts\/([a-f0-9]{32})$/)) && method === 'GET') { runGuard(handleNativeArtifact(req, res, m[1], m[2]), res); return true; }
     /* decodeURIComponent THROWS on a malformed escape ("%ZZ"), and handle() is called SYNCHRONOUSLY as the
        first statement of the server's request callback — above index.js's central
        Promise.resolve(dispatchRoute).catch(routeFailure) guard. So one bad run id became an

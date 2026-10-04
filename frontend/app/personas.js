@@ -176,3 +176,4 @@ const Personas = (() => {
   }
   return { get, list, exists, resolve, compose, effective, ambient, hasTuning, DEFAULT_ID, TRAITS, TOGGLES, PROFANITY, STATION_VOICE };
 })();
+if (typeof module !== 'undefined' && module.exports) module.exports = Personas;

@@ -1466,7 +1466,8 @@ const App = (() => {
       // sidecar records the stamp of the last accepted write and 200s { ok:false, stale:true } on an older one;
       // a legacy stamp-less push still writes as before (backward compatible). Date.now() is monotonic-enough for
       // this last-write anti-clobber (mirrors save.js's own updatedAt stamp).
-      lastRosterPush = fetch('/api/roster', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agents: list, updatedAt: Date.now() }) })
+      lastRosterPush = fetch('/api/roster', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agents: list, updatedAt: Date.now(),
+        floBaseSaveRevision: typeof CloudSave !== 'undefined' && CloudSave.revision ? CloudSave.revision() : 0 }) })
         .then(async r => {
           if (r && r.ok === false) throw new Error('roster HTTP ' + r.status);
           // EL-11 FIX 1: the sidecar answers REFUSALS as HTTP 200 { ok:false, ... } (degraded workspace /
@@ -1541,6 +1542,103 @@ const App = (() => {
       queueMicrotask(() => { stationSaveQueued = false; persist(); });
     });
   }
+
+  /* NATIVE-REFRESH-BEGIN — executed from the real source by the refresh test. */
+  let nativeRefreshRevision = 0, nativeShownRevision = 0;
+  let nativeRefreshBusy = false, nativeRefreshTimer = null;
+  function nativeRefreshBlocked() {
+    if (!agent || !station) return 'The station is still opening.';
+    if (stationSaveQueued) return 'Your floor changes are being saved.';
+    if (typeof Build !== 'undefined' && Build.isOpen && Build.isOpen()) return 'Finish or close REFIT before refreshing the station.';
+    if (typeof Channels !== 'undefined' && Channels.busyCount && Channels.busyCount()
+      || typeof Chat !== 'undefined' && (Chat.isBusy && Chat.isBusy() || Chat.beatBusy && Chat.beatBusy())) return 'Your conversation is still working. The station will refresh when it finishes.';
+    const fields = document.querySelectorAll('#terms input, #terms textarea, #terms select, #terms [contenteditable="true"], .ws-rename, [data-dirty="1"]');
+    for (const field of fields) {
+      if (field.id !== 'chat-input' && field.offsetParent !== null) return 'Finish or close your open editor before refreshing the station.';
+    }
+    const marker = CloudSave.readMarker();
+    if (!marker.safe) return marker.conflict
+      ? 'Your changes were preserved after another station save. Resolve the save notice before refreshing.'
+      : 'Your local changes are being preserved. The station will refresh after saving.';
+    return '';
+  }
+  function nativeRefreshNotice(message) {
+    let notice = el('native-station-refresh');
+    if (!message) { if (notice) notice.remove(); return; }
+    if (!notice) {
+      notice = document.createElement('div'); notice.id = 'native-station-refresh'; notice.setAttribute('role', 'status');
+      notice.style.cssText = 'position:fixed;top:72px;right:20px;z-index:99999;max-width:420px;padding:12px;background:rgba(25,22,14,.96);color:#eed29a;border:1px solid #957139;box-shadow:0 8px 30px #0008';
+      const text = document.createElement('span'); text.className = 'native-refresh-text';
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'bb'; button.textContent = 'Refresh station';
+      button.style.marginLeft = '12px'; button.onclick = () => refreshNativeStation();
+      notice.append(text, button); document.body.append(notice);
+    }
+    notice.querySelector('.native-refresh-text').textContent = message;
+  }
+  function scheduleNativeRefresh() {
+    if (!nativeRefreshTimer && nativeRefreshRevision > nativeShownRevision) nativeRefreshTimer = setTimeout(() => {
+      nativeRefreshTimer = null; refreshNativeStation();
+    }, 2000);
+  }
+  function applyNativeReadback(saved, nextStation) {
+    // Keep the actual focused agent and stream objects: Chat/Channels retain
+    // those references, input drafts and attachment state throughout this read.
+    for (const s of saved.agents) {
+      const existing = agents.get(s.id);
+      if (existing) Object.assign(existing, s);
+    }
+    rehydrateRoster(saved.agents);
+    if (typeof DossierStore !== 'undefined' && saved.dossier) DossierStore.init({ dossier: saved.dossier, readOnly: true });
+    for (const a of agents.values()) a.systemPrompt = composeSystemPrompt(a);
+    if (typeof Chat !== 'undefined' && Chat.setSystem) Chat.setSystem(agent.systemPrompt);
+    for (const row of saved.workstreams || []) {
+      const existing = Workstreams.get(row.id);
+      if (!existing) Workstreams.adopt(row);
+      else {
+        // Native task/config commands do not own a running conversation's
+        // history, read markers, cost or unsent COMMS draft.
+        for (const key of ['title', 'titleAuto', 'kind', 'lane', 'agentId', 'pinned', 'archived']) {
+          if (Object.prototype.hasOwnProperty.call(row, key) && !(key === 'archived' && row.id === Workstreams.activeId())) existing[key] = row[key];
+        }
+      }
+    }
+    station = nextStation; watchStationSave();
+    World.loadStation(station, { readOnlyHost: true });
+    for (const a of liveAgents()) if (a.id !== agent.id && World.spawnAgent) World.spawnAgent(a);
+    if (typeof StationUI !== 'undefined') {
+      if (StationUI.setRoster) StationUI.setRoster(liveAgents());
+      if (StationUI.refreshBoard) StationUI.refreshBoard();
+    }
+    renderRail();
+    if (typeof Chat !== 'undefined' && Chat.refreshAgentIdentity) Chat.refreshAgentIdentity();
+  }
+  async function refreshNativeStation() {
+    if (nativeRefreshBusy || nativeRefreshRevision <= nativeShownRevision) return;
+    const blocked = nativeRefreshBlocked();
+    if (blocked) { nativeRefreshNotice(blocked); scheduleNativeRefresh(); return; }
+    nativeRefreshBusy = true;
+    try {
+      const marker = CloudSave.readMarker(), targetRevision = nativeRefreshRevision;
+      const remote = await CloudSave.pull();
+      const changed = nativeRefreshBlocked();
+      if (changed) throw new Error(changed);
+      if (!remote || !Number.isSafeInteger(remote._saveRevision) || remote._saveRevision < targetRevision
+        || !Array.isArray(remote.agents) || !remote.agents.some(a => a.id === agent.id)
+        || liveAgents().some(a => !remote.agents.some(s => s.id === a.id)) || !remote.station || !remote.station.rooms) throw new Error('The newer station could not be read safely. Your current view is preserved.');
+      const nextStation = WorldModel.deserialize(remote.station);
+      const accepted = CloudSave.adoptReadback(remote, marker);
+      applyNativeReadback(accepted, nextStation);
+      nativeShownRevision = remote._saveRevision;
+      nativeRefreshNotice('');
+    } catch (e) { nativeRefreshNotice(String(e && e.message || 'The station could not be refreshed.')); }
+    finally { nativeRefreshBusy = false; scheduleNativeRefresh(); }
+  }
+  if (typeof U !== 'undefined' && U.bus) U.bus.on('station.native.changed', payload => {
+    if (!payload || !Number.isSafeInteger(payload.revision) || payload.revision <= 0) return;
+    nativeRefreshRevision = Math.max(nativeRefreshRevision, payload.revision);
+    refreshNativeStation();
+  });
+  /* NATIVE-REFRESH-END */
 
   let saveFailureNotified = false;
   function persist() {
@@ -3087,6 +3185,7 @@ const App = (() => {
       if (!hadStationId || (seeded && seeded.ok && !seeded.existing)) persist();
     }
     if (typeof World.loadStation === 'function') World.loadStation(station);   // the live world IS the built station
+    nativeShownRevision = typeof CloudSave !== 'undefined' && CloudSave.revision ? CloudSave.revision() : 0;
     // give resumed summoned crew their real floor bodies now that the station/geo is loaded (no-op for a
     // single-agent save; summon-during-game spawns its own body directly).
     for (const a of liveAgents()) if (a.id !== agent.id && typeof World.spawnAgent === 'function') World.spawnAgent(a);

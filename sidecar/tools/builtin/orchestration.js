@@ -376,6 +376,10 @@
         + context + '\n\n[YOUR SUBTASK]\n' + ask;
     }
     const perWorker = (typeof deps.perWorker === 'number' && isFinite(deps.perWorker) && deps.perWorker > 0) ? deps.perWorker : 0;
+    // The signed native operation already supplies its host-owned profile and
+    // shared pass limits. A channel hostname in that broader task is not an
+    // independent instruction to reduce it to the direct-domain lookup kit.
+    const workerDomainTask = text => deps.boundedDomainTasks === false ? null : boundedDomainTask(text);
     // Zero means no user-work quota. Narrow task contracts and structured-output repair
     // still impose their own local ceilings below; those are correctness safeguards.
     const workerMaxIters = (typeof deps.workerMaxIters === 'number' && isFinite(deps.workerMaxIters) && deps.workerMaxIters > 0) ? Math.floor(deps.workerMaxIters) : 0;
@@ -607,7 +611,7 @@
           // straggler is stopped ALONE and comes back as one honest `timeout` row while its siblings' work survives.
           // Background workers pass no wallMs — outliving the tool call is the whole point of background:true.
           const parentSignal = o2.signal || (ctx && ctx.signal);
-          const bounded = boundedDomainTask(job.prompt);
+          const bounded = workerDomainTask(job.prompt);
           // minted up front (not inline in the runOnce call) so the row can carry the SAME id the run was filed
           // under — the page's delivery uses it to append the run to the session and to stay idempotent.
           const workerRunId = o2.runId || newId();
@@ -674,83 +678,86 @@
               maxToolCalls: bounded ? bounded.workerMaxTools : undefined,
               steer: typeof o2.steer === 'function' ? o2.steer : undefined
             });
+            noteSessionActivity('station.dispatch_end', job, workerRunId);
+            if (timedOut) return timeoutRow(result);   // keep whatever partial text the aborted run did produce
+            if (!result) return { agentId: job.agentId, reason: 'refused', result: 'worker could not start — the station\'s concurrent-agent cap was full at that instant, or a provider sign-in is needed. A parallel dispatch already runs in waves sized to the free capacity and retries a refusal once, so a refusal that survives means the cap is genuinely saturated: raise MAX_CONCURRENT_AGENTS in SETTINGS, or dispatch these workers in a follow-up call.', usd: 0 };
+            const firstText = lastAssistant(result.messages) || '(the worker returned no text)';
+            const contract = await enforceStructured(job.resultSchema, firstText, async (errors) => {
+              const spent = Number(result.usd) || 0;
+              const remaining = perWorker > 0 ? Math.max(0, perWorker - spent) : 0;
+              if (perWorker > 0 && remaining <= 0) return null;
+              const repairRunId = newId();
+              const repair = await runOnce({
+                outputOnly: true,
+                ...projectOptions(job.sessionContext || ctx), ...connectorOptions(ctx),
+                key: wire.key, provider: wire.provider, baseUrl: wire.baseUrl,
+                reasoningEffort: (job.ident && job.ident.reasoningEffort) || reasoningEffort,
+                model: wire.model, system: workerSystem((job.ident && job.ident.system) || ''),
+                messages: [{ role: 'user', content: contractedPrompt }, { role: 'assistant', content: firstText },
+                  { role: 'user', content: '[STRUCTURED RESULT REPAIR] The prior result failed host validation:\n- ' + errors.slice(0, 20).join('\n- ') + '\nReturn ONLY strict JSON matching: ' + JSON.stringify(job.resultSchema) }],
+                agentId: job.agentId, isTask: true, emit: o2.emit || childEmit,
+                signal: ac ? ac.signal : parentSignal, runId: repairRunId, trigger: 'directive', surface: 'autonomous',
+                parentRunId: ctx && ctx.runId, streamId: job.streamId || undefined,
+                sessionTitle: job.streamId ? (job.sessionTitle || job.session || '') : undefined,
+                consent: ctx && ctx.consent, extraObjects: WORKER_KIT,
+                maxCostUsd: perWorker > 0 ? remaining : 0,
+                maxIters: lowerPositive(4, bounded ? lowerPositive(workerMaxIters, bounded.workerMaxIters) : workerMaxIters),
+                maxToolCalls: bounded ? bounded.workerMaxTools : undefined,
+                steer: typeof o2.steer === 'function' ? o2.steer : undefined
+              });
+              return repair ? { text: lastAssistant(repair.messages), result: repair, runId: repairRunId } : null;
+            });
+            const repaired = contract.repairResult || null;
+            const totalUsd = (Number(result.usd) || 0) + (Number(repaired && repaired.usd) || 0);
+            if (timedOut) return timeoutRow(Object.assign({}, repaired || result, { usd: totalUsd }));
+            const artifacts = [].concat(Array.isArray(result.artifacts) ? result.artifacts : [], Array.isArray(repaired && repaired.artifacts) ? repaired.artifacts : []);
+            if (job.resultSchema && !contract.ok) return {
+              agentId: job.agentId, reason: 'invalid-result',
+              result: 'Worker output failed its result schema after one bounded repair attempt. No completion was accepted.',
+              usd: totalUsd, runId: workerRunId, repairRunId: contract.repairRunId || '', validation: contract.validation,
+              artifacts: artifacts.map(a => Object.assign({}, a, { agentId: job.agentId, workspace: job.agentId }))
+            };
+            const effective = repaired || result;
+            const row = {
+              agentId: job.agentId,
+              reason: effective.reason || 'done',
+              result: contract.text,
+              structuredResult: job.resultSchema ? contract.value : null,
+              validation: contract.validation,
+              repairRunId: contract.repairRunId || '',
+              usd: totalUsd,
+              runId: workerRunId,
+              model: effective.model || wire.model,
+              reasoningEffort: effective.reasoningEffort || ((job.ident && job.ident.reasoningEffort) || reasoningEffort),
+              toolsOk: (Number(result.toolsOk) || 0) + (Number(repaired && repaired.toolsOk) || 0),
+              durationMs: (Number(result.durationMs) || 0) + (Number(repaired && repaired.durationMs) || 0),
+              tokens: (Number(result.tokens) || 0) + (Number(repaired && repaired.tokens) || 0)
+            };
+            const rowTaint = taintOfRun(result, repaired);
+            if (rowTaint) row.taintedBy = rowTaint;
+            if (wire.note) row.note = wire.note;   // honest credential-fallback disclosure (never silent)
+            /* Show it where the Commander asked for it. Only a COMPLETED worker delivers: every other outcome
+               (error / refused / timeout) returned above, so a partial or failed run is reported to the lead but
+               never folded into a session as though it were finished work. */
+            await deliverToSession(job, row);
+            // WORK VISIBILITY (ghost-file fix): what the worker PROVABLY produced (its runOnce artifact ledger),
+            // stamped with the OWNING agentId. Files live in the WORKER's private workspace — the lead cannot
+            // fs.read them and must reference them as the worker's (they are already shown to the Commander as
+            // cards via the forwarded deliverable events). Never invent paths beyond this list.
+            if (artifacts.length) {
+              row.artifacts = artifacts.map(a => Object.assign({}, a, { agentId: job.agentId, workspace: job.agentId }));
+            }
+            return row;
           } catch (e) {
             noteSessionActivity('station.dispatch_end', job, workerRunId);
-            if (timedOut) return timeoutRow(null);   // the abort we fired surfaced as a throw — still an honest timeout
+            if (timedOut) return timeoutRow(result);   // preserve the initial result if its repair exhausted the same slice
             return { agentId: job.agentId, reason: 'error', result: 'worker run failed: ' + ((e && e.message) || e), usd: 0 };
           } finally {
+            // The initial run and its one output repair share this clock and
+            // parent cancellation link. Detach only after both have settled.
             if (timer) clearTimeout(timer);
             if (child) child.detach();
           }
-          noteSessionActivity('station.dispatch_end', job, workerRunId);
-          if (timedOut) return timeoutRow(result);   // keep whatever partial text the aborted run did produce
-          if (!result) return { agentId: job.agentId, reason: 'refused', result: 'worker could not start — the station\'s concurrent-agent cap was full at that instant, or a provider sign-in is needed. A parallel dispatch already runs in waves sized to the free capacity and retries a refusal once, so a refusal that survives means the cap is genuinely saturated: raise MAX_CONCURRENT_AGENTS in SETTINGS, or dispatch these workers in a follow-up call.', usd: 0 };
-          const firstText = lastAssistant(result.messages) || '(the worker returned no text)';
-          const contract = await enforceStructured(job.resultSchema, firstText, async (errors) => {
-            const spent = Number(result.usd) || 0;
-            const remaining = perWorker > 0 ? Math.max(0, perWorker - spent) : 0;
-            if (perWorker > 0 && remaining <= 0) return null;
-            const repairRunId = newId();
-            const repair = await runOnce({
-              outputOnly: true,
-              ...projectOptions(job.sessionContext || ctx), ...connectorOptions(ctx),
-              key: wire.key, provider: wire.provider, baseUrl: wire.baseUrl,
-              reasoningEffort: (job.ident && job.ident.reasoningEffort) || reasoningEffort,
-              model: wire.model, system: workerSystem((job.ident && job.ident.system) || ''),
-              messages: [{ role: 'user', content: contractedPrompt }, { role: 'assistant', content: firstText },
-                { role: 'user', content: '[STRUCTURED RESULT REPAIR] The prior result failed host validation:\n- ' + errors.slice(0, 20).join('\n- ') + '\nReturn ONLY strict JSON matching: ' + JSON.stringify(job.resultSchema) }],
-              agentId: job.agentId, isTask: true, emit: o2.emit || childEmit,
-              signal: ac ? ac.signal : parentSignal, runId: repairRunId, trigger: 'directive', surface: 'autonomous',
-              parentRunId: ctx && ctx.runId, streamId: job.streamId || undefined,
-              sessionTitle: job.streamId ? (job.sessionTitle || job.session || '') : undefined,
-              consent: ctx && ctx.consent, extraObjects: WORKER_KIT,
-              maxCostUsd: perWorker > 0 ? remaining : 0,
-              maxIters: lowerPositive(4, bounded ? lowerPositive(workerMaxIters, bounded.workerMaxIters) : workerMaxIters),
-              maxToolCalls: bounded ? bounded.workerMaxTools : undefined,
-              steer: typeof o2.steer === 'function' ? o2.steer : undefined
-            });
-            return repair ? { text: lastAssistant(repair.messages), result: repair, runId: repairRunId } : null;
-          });
-          const repaired = contract.repairResult || null;
-          const totalUsd = (Number(result.usd) || 0) + (Number(repaired && repaired.usd) || 0);
-          const artifacts = [].concat(Array.isArray(result.artifacts) ? result.artifacts : [], Array.isArray(repaired && repaired.artifacts) ? repaired.artifacts : []);
-          if (job.resultSchema && !contract.ok) return {
-            agentId: job.agentId, reason: 'invalid-result',
-            result: 'Worker output failed its result schema after one bounded repair attempt. No completion was accepted.',
-            usd: totalUsd, runId: workerRunId, repairRunId: contract.repairRunId || '', validation: contract.validation,
-            artifacts: artifacts.map(a => Object.assign({}, a, { agentId: job.agentId, workspace: job.agentId }))
-          };
-          const effective = repaired || result;
-          const row = {
-            agentId: job.agentId,
-            reason: effective.reason || 'done',
-            result: contract.text,
-            structuredResult: job.resultSchema ? contract.value : null,
-            validation: contract.validation,
-            repairRunId: contract.repairRunId || '',
-            usd: totalUsd,
-            runId: workerRunId,
-            model: effective.model || wire.model,
-            reasoningEffort: effective.reasoningEffort || ((job.ident && job.ident.reasoningEffort) || reasoningEffort),
-            toolsOk: (Number(result.toolsOk) || 0) + (Number(repaired && repaired.toolsOk) || 0),
-            durationMs: (Number(result.durationMs) || 0) + (Number(repaired && repaired.durationMs) || 0),
-            tokens: (Number(result.tokens) || 0) + (Number(repaired && repaired.tokens) || 0)
-          };
-          const rowTaint = taintOfRun(result, repaired);
-          if (rowTaint) row.taintedBy = rowTaint;
-          if (wire.note) row.note = wire.note;   // honest credential-fallback disclosure (never silent)
-          /* Show it where the Commander asked for it. Only a COMPLETED worker delivers: every other outcome
-             (error / refused / timeout) returned above, so a partial or failed run is reported to the lead but
-             never folded into a session as though it were finished work. */
-          await deliverToSession(job, row);
-          // WORK VISIBILITY (ghost-file fix): what the worker PROVABLY produced (its runOnce artifact ledger),
-          // stamped with the OWNING agentId. Files live in the WORKER's private workspace — the lead cannot
-          // fs.read them and must reference them as the worker's (they are already shown to the Commander as
-          // cards via the forwarded deliverable events). Never invent paths beyond this list.
-          if (artifacts.length) {
-            row.artifacts = artifacts.map(a => Object.assign({}, a, { agentId: job.agentId, workspace: job.agentId }));
-          }
-          return row;
         };
 
         if (args.background) {
@@ -902,7 +909,7 @@
           let settle; const done = new Promise(res => { settle = res; });
           const runner = async (h) => {
             let result;
-            const bounded = boundedDomainTask(prompt);
+            const bounded = workerDomainTask(prompt);
             const contractedPrompt = openingMessage(prompt, task.context, task.resultSchema);
             try {
               result = await runOnce({
@@ -1097,7 +1104,7 @@
         if (!ident) return { status: 'error', reason: 'error', result: 'worker is no longer in the live roster', usd: 0 };
         const wire = workerWire(ident);   // same cross-provider resolution as a fresh dispatch
         let result;
-        const bounded = boundedDomainTask(rec.prompt || '');
+        const bounded = workerDomainTask(rec.prompt || '');
         // The durable record carries the lead's handoff `context`, so a resumed worker rebuilds the SAME
         // opening message a fresh dispatch would have — a restart never silently drops the handoff.
         const contractedPrompt = openingMessage(rec.prompt || '', handoffContext(rec.context), rec.resultSchema);

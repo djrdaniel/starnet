@@ -401,6 +401,35 @@ const CloudSave = (() => {
       .then(r => !!(r && r.ok)).catch(() => false);
   }
 
+  // A headless native station change is already durable. Read-back adoption
+  // must never POST an older browser roster/floor or discard an unsaved edit.
+  // Capture the cache itself: a save/ACK arriving during pull invalidates this
+  // marker even if it did not create a new localSnapshot object.
+  function readMarker() {
+    let raw = null, dirty = true;
+    try { raw = localStorage.getItem('starnet.save'); dirty = !!(raw && JSON.parse(raw)._saveDirty); } catch (_) {}
+    return { revision, local: latestLocal, raw, pending: !!pending, inflight: activeFlushes.size > 0,
+      conflict: !!conflict, dirty, safe: !pending && !activeFlushes.size && !conflict && !dirty };
+  }
+  function adoptReadback(current, marker) {
+    const actual = readMarker();
+    if (!marker || !marker.safe || !actual.safe || actual.local !== marker.local || actual.raw !== marker.raw
+      || actual.revision !== marker.revision) throw new Error('This window changed while reading the station. Your work remains preserved.');
+    if (!isSave(current) || isFutureSave(current) || num(current._saveRevision) < revision) throw new Error('The current station could not be read safely.');
+    const raw = JSON.stringify({ ...current, _saveDirty: false });
+    try {
+      localStorage.setItem('starnet.save', raw);
+      if (localStorage.getItem('starnet.save') !== raw) throw new Error('cache write was not confirmed');
+      const migrated = typeof Save !== 'undefined' && Save.load ? Save.load() : null;
+      if (!isSave(migrated) || isFutureSave(migrated)) throw new Error('The current station could not be re-validated.');
+      revision = num(current._saveRevision); latestLocal = migrated;
+      return migrated;
+    } catch (e) {
+      try { if (marker.raw != null) localStorage.setItem('starnet.save', marker.raw); else localStorage.removeItem('starnet.save'); } catch (_) {}
+      throw e;
+    }
+  }
+
   async function reloadCurrent() {
     if (typeof App !== 'undefined' && App.persist) App.persist();
     const confirmed = await flush({ force: true });
@@ -420,6 +449,6 @@ const CloudSave = (() => {
     } catch (_) { throw new Error('Could not cache the current station. This window remains preserved; reload was cancelled.'); }
     location.reload();
   }
-  return { localSnapshot: () => latestLocal, reloadCurrent, revision: () => revision, push, pull, reconcile, flush, flushForUpdate, installUnloadFlush, health: healthNow, isFutureSentinel, isUnknownSentinel, markDegraded, recoveryNotice, lineage, ackRecovery, pullOutcome: () => lastPullOutcome, _isSave: isSave, _isFutureSave: isFutureSave };
+  return { localSnapshot: () => latestLocal, reloadCurrent, readMarker, adoptReadback, revision: () => revision, push, pull, reconcile, flush, flushForUpdate, installUnloadFlush, health: healthNow, isFutureSentinel, isUnknownSentinel, markDegraded, recoveryNotice, lineage, ackRecovery, pullOutcome: () => lastPullOutcome, _isSave: isSave, _isFutureSave: isFutureSave };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = CloudSave;

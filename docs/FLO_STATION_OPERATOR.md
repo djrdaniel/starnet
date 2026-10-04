@@ -1,5 +1,79 @@
 # Flo station operator bridge
 
+## Native operation integration — 4 October 2026
+
+The owner's current direction supersedes the fixed four-worker controller below.
+Flo admits an objective and controls its exact operation; StarNet's actual host
+now directs the native crew, recruitment, saved tasks/sessions, additive Build and
+worker artifact production. The integrated station remains the primary Flo
+Company view. Historical Company workflows and their saved evidence remain in
+Advanced / recovery and cannot run alongside an active native operation.
+
+`flo-operator` and `flo-operator-worker` are host-only profiles. JSON ingress,
+ordinary chat completions, prompts and worker results cannot mint their private
+in-process authority. They use the configured ChatGPT OAuth model with high
+reasoning at execution, preserving the owner's saved model, medium reasoning,
+ask-for-approval and trusted-project settings. Public web, named-worker jailed
+files and memory are available; the lead additionally has native recruitment,
+delegation, tasks, sessions, Dossier text and validated additive construction.
+Foreground parallel delegation stays within one cancellable pass. Background
+dispatch and worker recursion are withheld.
+
+Native operation goals retain this explicit host-owned scope instead of the
+ordinary single-domain task heuristic. Mentioning `itch.io` in a broad commerce
+goal cannot hide delegation/search or pin all fetching to that one host. The
+allowed native tools are advertised directly, and commerce children retain the
+native worker's bounded clock/tool allowance. Ordinary single-site inspections
+keep their narrower domain policy; public-reader private-address, credential-URL
+and DNS-rebinding checks still apply.
+
+The host shares a durable 160-tool-call / 15-minute allowance across each pass;
+the lead has 80 calls / 48 iterations and each worker 40 calls / 32 iterations /
+10 minutes. Ongoing operations reassess after 15 minutes, with up to 48 passes
+per operation per UTC day and 32 real crew. Existing unscoped routines,
+Nightshift and workshops remain held by the protected managed policy. Paid
+provider/media fallbacks, arbitrary connectors, shell/host paths, DJR control,
+publication, purchases and supplier/customer messages gain no authority.
+
+`station.manual` reads the bundled source-native manual and the integration
+contract. `station.layout` supplies actual coordinates, catalog footprints,
+bindings and routing. `commerce.read` reads bounded saved Flo connection,
+product, launch and release facts through one fixed authenticated loopback GET;
+it performs no live store request, and supplies no credentials or buyer data.
+Connection evidence and staged files must never be presented as sales or profit.
+
+| Route | Native operation contract |
+| --- | --- |
+| `GET /v1/station/operations` | Read actual operation, worker activity, limits, events, verified files and exact action receipts; starts nothing. |
+| `POST /v1/station/operations` | Confirm one objective, unique `request_id` and `once` or `ongoing` mode; enroll and verify the actual native save before admission. |
+| `POST /v1/station/operations/{id}/action` | Confirm `pause`, `resume` or `stop` for the exact current operation and request ID. Pause/stop cancel the lead and its children. |
+| `GET /v1/station/operations/{id}/artifacts/{id}` | Reopen the worker-jail file, compare its saved bounded byte count and SHA-256, and return a safe attachment. Changed files require a new delivery receipt. |
+
+The operation ledger commits before provider work and before each shared-budget
+tool admission. Final dispatcher preflight/refusal/structured-validation outcomes
+and failed reported-file read-back remain durable failures, even if a raw child
+or lead says done. Structured repair keeps the original worker clock and parent
+cancellation link. Interrupted work, recovered backup uncertainty and
+unproven writes stop for inspection; unknown commands are never blindly replayed.
+Between proven completed passes, an ongoing goal retains its saved due time over
+restart. A completed `once` operation means a bounded pass finished, not income.
+
+Native mutations use StarNet's canonical save revision, real WorldModel/class/
+workstream engines, private prewrite recovery snapshots and read-back receipts.
+Recent mutation receipts retire into hashed replay tombstones. Mirror recovery
+verifies the original enrollment even after receipt rollover without creating a
+new mutation. Browser saves preserve host proof; roster/routing writes require
+the real canonical revision. Native SSE refresh adopts current crew/floor without
+replaying a stale roster or overwriting open COMMS/history/drafts/editors.
+
+Validation is registered in the standard fast and HTTP manifests. The dedicated
+native adapter/refresh, operation, auth/download, save-policy, commerce-reader,
+dispatch-lifecycle and real-host stale-mirror suites cover these boundaries using
+isolated temporary workspaces. Actual bench proof is recorded in Flo's
+`docs/WORKLOG.md`; test fixtures do not establish commercial readiness.
+
+## Earlier fixed handoff implementation — retained provenance
+
 Implemented on 2026-10-03 for the owner's Flo workspace and commerce station setup. Flo owns the owner-facing goal, job admission, evidence and automatic handoffs between the existing Chief of Staff, Research, Product Lead (`strategist`, acting as Product Manager) and QA Reviewer. Publishing, spending and production changes remain owner decisions. Native worker-to-worker dispatch remains disabled.
 
 All routes use StarNet's existing loopback Host pin and strong `/v1` bearer authentication. They never vend the native browser launch token, OAuth credentials or private worker personas. Read routes do not start work or grant authority.

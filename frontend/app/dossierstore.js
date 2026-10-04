@@ -26,8 +26,8 @@ const DossierStore = (() => {
     dossier = (typeof Dossier !== 'undefined')
       ? Dossier.hydrate(opts.dossier)         // resume the saved slice (or a fresh one) — defensively sanitized
       : (opts.dossier || null);
-    if (ready() && opts.docs) Dossier.seedFromDocs(dossier, opts.docs, now());   // first-seed-wins per doc
-    pushToSidecar();   // Phase C: hand the composed block to the sidecar so server-composed (cron) runs know the Commander
+    if (!opts.readOnly && ready() && opts.docs) Dossier.seedFromDocs(dossier, opts.docs, now());   // first-seed-wins per doc
+    if (!opts.readOnly) pushToSidecar();   // Phase C: a native read-back has already been mirrored by its host
   }
 
   // Phase C: mirror the composed Commander block to the sidecar so AUTONOMOUS server-composed runs (cron) —

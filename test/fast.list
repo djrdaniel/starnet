@@ -1,6 +1,16 @@
 # Fast test gate steps - run in order by scripts/run-fast-tests.mjs. One path per line.
 test/schema.test.js
 test/overseer.test.js
+test/flo-native-station.test.js
+test/flo-native-refresh.test.js
+test/flo-native-dispatch-profile.test.js
+test/flo-native-dispatch-outcomes.test.js
+test/flo-native-tool-availability.test.js
+test/dispatch.structured-cancellation.test.js
+test/flo-native-commerce.test.js
+sidecar/test-flo-native-operations.js
+sidecar/test-flo-native-http.js
+sidecar/test-flo-native-save-policy.js
 test/chat-file-drop.test.js
 test/group-sessions.test.js
 test/group-message-attachments.test.js

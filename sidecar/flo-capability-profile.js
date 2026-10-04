@@ -4,12 +4,23 @@
 const { assertSafeUrl } = require('./tools/builtin/web.js');
 const PROFILES = Object.freeze({
   'flo-text': Object.freeze({ id: 'flo-text', tools: Object.freeze([]), max_tool_calls: 0, max_iterations: 1, max_duration_ms: 600000 }),
-  'flo-research': Object.freeze({ id: 'flo-research', tools: Object.freeze(['web_search', 'web_fetch']), max_tool_calls: 4, max_iterations: 8, max_duration_ms: 300000 })
+  'flo-research': Object.freeze({ id: 'flo-research', tools: Object.freeze(['web_search', 'web_fetch']), max_tool_calls: 4, max_iterations: 8, max_duration_ms: 300000 }),
+  'flo-operator': Object.freeze({ id: 'flo-operator', host_only: true, tools: Object.freeze([
+    'web_search', 'web_fetch', 'fs.read', 'fs.write', 'fs.append', 'fs.edit', 'fs.search', 'fs.list', 'fs.patch',
+    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation',
+    'team.list', 'team.dispatch', 'team.summon', 'team.subagents', 'team.steer',
+    'session.list', 'session.create', 'session.peek', 'task.list', 'task.create', 'task.manage',
+    'team.config', 'team.configure', 'station.layout', 'station.build', 'station.manual', 'commerce.read'
+  ]), max_tool_calls: 80, max_iterations: 48, max_duration_ms: 900000 }),
+  'flo-operator-worker': Object.freeze({ id: 'flo-operator-worker', host_only: true, tools: Object.freeze([
+    'web_search', 'web_fetch', 'fs.read', 'fs.write', 'fs.append', 'fs.edit', 'fs.search', 'fs.list', 'fs.patch',
+    'notebook.read', 'notebook.write', 'notebook.search', 'notebook.feedback', 'recall_conversation'
+  ]), max_tool_calls: 40, max_iterations: 32, max_duration_ms: 600000 })
 });
 function resolve(value) {
   if (value === undefined) return null;
   if (typeof value !== 'string' || !Object.prototype.hasOwnProperty.call(PROFILES, value)) {
-    throw new Error('Unknown capability_profile; use flo-text or flo-research.');
+    throw new Error('Unknown capability_profile.');
   }
   return PROFILES[value];
 }
@@ -35,15 +46,24 @@ function publicEvidenceUrl(value) {
     return u.href.slice(0, 2000);
   } catch (_) { return null; }
 }
-function makeGuard(profile) {
+function makeGuard(profile, sharedBudget) {
   if (!profile) return null;
   const allowed = new Set(profile.tools), trace = [], sources = [];
   let calls = 0, denied = 0, limitReason = null;
   function start(name, args) {
     if (!allowed.has(name)) { denied++; return { ok: false, summary: 'capability-profile-denied', content: 'This Flo profile cannot use ' + name + '. Continue only with its permitted capabilities.' }; }
-    if (calls >= profile.max_tool_calls) {
+    // Background station workers outlive the normal lead return. This durable
+    // operation instead settles only after its foreground children have ended,
+    // so its shared budget, pause signal and outcome remain one proven pass.
+    if (profile.host_only && name === 'team.dispatch' && args
+      && Object.prototype.hasOwnProperty.call(args, 'background') && args.background !== false) {
+      denied++;
+      return { ok: false, summary: 'capability-profile-foreground-required',
+        content: 'Native Flo operations require foreground team.dispatch so every worker remains within this durable pass. Omit background or set it to false. Use parallel:true for concurrent work within the pass.' };
+    }
+    if (calls >= profile.max_tool_calls || sharedBudget && !sharedBudget.take()) {
       limitReason = limitReason || 'max_tool_calls';
-      return { ok: false, summary: 'capability-profile-limit', content: 'This Flo research run reached its fixed four-call limit. Finish with the evidence already collected and state what remains unverified.' };
+      return { ok: false, summary: 'capability-profile-limit', content: 'This Flo run reached its admitted tool or time allowance. Finish with verified work and state what remains unfinished.' };
     }
     calls++;
     trace.push({ sequence: calls, tool: name, query: name === 'web_search' ? String((args || {}).query || '').slice(0, 2000) : undefined,

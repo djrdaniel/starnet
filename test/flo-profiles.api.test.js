@@ -21,7 +21,10 @@ const {makeOpenAiCompat}=require('../sidecar/openai-compat');
  try {
   assert.equal((await fetch(base+'/v1/capabilities')).status,401,'capabilities requires bearer');
   const caps=await(await fetch(base+'/v1/capabilities',{headers})).json();
-  assert.equal(caps.capability_profiles.length,2);assert.equal(caps.capability_profiles[0].max_duration_ms,600000);assert.equal(caps.capability_profiles[1].max_duration_ms,300000);assert.deepEqual(caps.capability_profiles[1].tools,['web_search','web_fetch']);
+  assert.deepEqual(caps.capability_profiles.map(profile=>profile.id).sort(),['flo-operator','flo-operator-worker','flo-research','flo-text']);
+  const profiles=new Map(caps.capability_profiles.map(profile=>[profile.id,profile]));
+  assert.equal(profiles.get('flo-text').max_duration_ms,600000);assert.equal(profiles.get('flo-research').max_duration_ms,300000);assert.deepEqual(profiles.get('flo-research').tools,['web_search','web_fetch']);
+  assert.equal(profiles.get('flo-operator').host_only,true);assert.equal(profiles.get('flo-operator-worker').host_only,true);
   for(const p of ['full',null,'']) {assert.equal((await post({input:'task',model:'RESEARCH',capability_profile:p})).status,400);}
   assert.equal(calls.length,0,'unknown profiles never dispatch');
   assert.equal((await post({input:'task',capability_profile:'flo-research'})).status,400,'unnamed non-OAuth worker is refused');

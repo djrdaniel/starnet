@@ -936,7 +936,10 @@ const leadCtx = () => ({ agentId: 'agent', emit: () => {} });
 {
   const src = fs.readFileSync(path.join(__dirname, '..', 'sidecar', 'index.js'), 'utf8');
   const block = src.slice(src.indexOf('makeOrchestrationTools({'), src.indexOf('}).register(registry);', src.indexOf('makeOrchestrationTools({')));
-  A.ok(/station: require\('\.\/overseer.js'\)\.isCoordinatorRun\([\s\S]*?\? overseerStation\(o.streamId, runId\) : stationBridge/.test(block), 'only coordinator runs receive durable session operations; other leads retain the visual bridge');
+  A.ok(/station: runNativeStation \|\| \(require\('\.\/overseer.js'\)\.isCoordinatorRun\([\s\S]*?\? overseerStation\(o.streamId, runId\) : stationBridge/.test(block), 'host-admitted native operations and coordinator runs receive durable sessions; other leads retain the visual bridge');
+  A.ok(/const runNativeStation = floNative \?/.test(src)
+    && /const floNative = !!\(floProfile && floProfile.host_only && o\.floNativeAuthority === FLO_NATIVE_AUTHORITY && o\.floNativePass\)/.test(src),
+    'the native durable bridge requires the host-private authority and pass, not an arbitrary JSON flag');
 }
 
 // the PAGE half exists and holds the line on both verbs
